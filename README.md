@@ -6,10 +6,6 @@ Finder for TontooOS: Tahoe-style file manager basis built with TontooUI (sidebar
 
 Explore more at https://github.com/TontooOS/TontooOS
 
-## Docs
-
-See [wiki/MAIN.md](wiki/MAIN.md).
-
 ## License
 
 TCL v26.1
