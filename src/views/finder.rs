@@ -19,10 +19,53 @@ use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
 use gtk::prelude::*;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 
 thread_local! {
   /// Keeps the downloads watcher alive for the app lifetime.
   static FOLDER_WATCHER: RefCell<Option<notify::RecommendedWatcher>> = RefCell::new(None);
+}
+
+/// Inline rename session: the entry path currently edited.
+#[derive(Clone, Debug)]
+struct EditSession {
+  path: std::path::PathBuf,
+}
+
+/// Shared rename session (main thread only in practice, `Send` for the
+/// menu callbacks).
+type SharedSession = Arc<Mutex<Option<EditSession>>>;
+
+/// Grid refresh signal shared by menu actions and edit commits.
+/// The 400ms main-thread tick picks it up and rebuilds the grid, so
+/// `Send`-bound menu callbacks never touch GTK widgets directly.
+type Refresh = Arc<dyn Fn() + Send + Sync>;
+
+/// Create a uniquely named folder (`Untitled Folder`, `Untitled
+/// Folder 2`, ...) and return its path.
+fn create_folder(base: &std::path::Path) -> Option<std::path::PathBuf> {
+  let stem = lang::t("folder.untitled");
+  let mut candidate = base.join(&stem);
+  let mut counter = 2;
+  while candidate.exists() {
+    candidate = base.join(format!("{stem} {counter}"));
+    counter += 1;
+  }
+  std::fs::create_dir(&candidate).ok()?;
+  Some(candidate)
+}
+
+/// Commit an inline rename. Returns true on success (caller refreshes);
+/// on failure the session stays active so the name can be fixed.
+fn commit_rename(base: &std::path::Path, entry: &model::DirEntry, typed: &str) -> bool {
+  let Some(new_name) = model::resolve_new_name(entry, typed) else {
+    return false;
+  };
+  let target = base.join(&new_name);
+  if target.exists() {
+    return false;
+  }
+  std::fs::rename(base.join(&entry.name), &target).is_ok()
 }
 
 const SF_PRO: &str = "SF Pro Display";
@@ -180,9 +223,19 @@ const TAG_DOT_COLORS: [(u8, u8, u8); 7] = [
   (142, 142, 147),
 ];
 
-/// File context menu entries for one display name. Actions log for
-/// now; Open With and Share carry a trailing disclosure icon.
-pub(crate) fn file_menu_entries(name: &str) -> Vec<MenuEntry> {
+/// File context menu entries for one entry. Rename opens inline
+/// rename; the rest logs for now. Open With and Share carry a
+/// trailing disclosure icon.
+pub(crate) fn file_menu_entries(
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  session: &SharedSession,
+  refresh: &Refresh,
+) -> Vec<MenuEntry> {
+  let name = model::display_name(&entry.name, entry.is_dir);
+  let rename_path = base.join(&entry.name);
+  let rename_session = session.clone();
+  let rename_refresh = refresh.clone();
   vec![
     MenuEntry::Item(
       MenuItem::new(lang::t("context.open")).on_activate(|| println!("Finder open")),
@@ -198,7 +251,13 @@ pub(crate) fn file_menu_entries(name: &str) -> Vec<MenuEntry> {
       MenuItem::new(lang::t("context.get_info")).on_activate(|| println!("Finder get info")),
     ),
     MenuEntry::Item(
-      MenuItem::new(lang::t("context.rename")).on_activate(|| println!("Finder rename")),
+      MenuItem::new(lang::t("context.rename")).on_activate(move || {
+        if let Ok(mut guard) = rename_session.lock() {
+          *guard = Some(EditSession { path: rename_path.clone() });
+        }
+        rename_refresh();
+        println!("Finder rename");
+      }),
     ),
     MenuEntry::Item(
       MenuItem::new(lang::t("context.compress")).on_activate(|| println!("Finder compress")),
@@ -213,7 +272,7 @@ pub(crate) fn file_menu_entries(name: &str) -> Vec<MenuEntry> {
     ),
     MenuEntry::Divider,
     MenuEntry::Item(
-      MenuItem::new(lang::t("context.copy").replace("{name}", name))
+      MenuItem::new(lang::t("context.copy").replace("{name}", &name))
         .on_activate(|| println!("Finder copy")),
     ),
     MenuEntry::Divider,
@@ -224,7 +283,15 @@ pub(crate) fn file_menu_entries(name: &str) -> Vec<MenuEntry> {
   ]
 }
 
-fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -> gtk::Widget {
+fn folder_cell(
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  pal: &Palette,
+  session: &SharedSession,
+  refresh: &Refresh,
+  grid: &gtk::FlowBox,
+  status: &gtk::Label,
+) -> gtk::Widget {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
@@ -274,36 +341,153 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   }
 
   let shown = model::display_name(&entry.name, entry.is_dir);
-  let label = gtk::Label::new(Some(&shown));
-  label.set_halign(gtk::Align::Center);
-  label.set_justify(gtk::Justification::Center);
-  label.set_wrap(true);
-  label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-  label.set_lines(2);
-  label.set_max_width_chars(16);
-  label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-  let css = format!(
-    ".fd-label {{ font-family: '{}'; font-size: 12px; font-weight: 600; color: {}; }}",
-    SF_PRO, pal.fg
-  );
-  crate::UIKit::widget::apply_css(&label, &css);
-  label.add_css_class("fd-label");
-  cell.append(&label);
+  let editing = session
+    .lock()
+    .ok()
+    .and_then(|guard| guard.clone())
+    .map(|edit| edit.path == base.join(&entry.name))
+    .unwrap_or(false);
+  if editing {
+    cell.append(&edit_field(base, entry, &shown, session, grid, status, pal, refresh));
+  } else {
+    let label = gtk::Label::new(Some(&shown));
+    label.set_halign(gtk::Align::Center);
+    label.set_justify(gtk::Justification::Center);
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_lines(2);
+    label.set_max_width_chars(16);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let css = format!(
+      ".fd-label {{ font-family: '{}'; font-size: 12px; font-weight: 600; color: {}; }}",
+      SF_PRO, pal.fg
+    );
+    crate::UIKit::widget::apply_css(&label, &css);
+    label.add_css_class("fd-label");
+    cell.append(&label);
+  }
 
   // Per-file context menu. The inner gesture claims the press first,
   // so the empty-space menu on the scroll area stays hidden over files.
-  let menu = ContextMenu::new(GtkWrap::wrap(cell)).entries(file_menu_entries(&shown));
+  let menu = ContextMenu::new(GtkWrap::wrap(cell)).entries(file_menu_entries(
+    base,
+    entry,
+    session,
+    refresh,
+  ));
   menu.to_gtk()
 }
 
+/// Inline rename field prefilled with the display name. Enter commits
+/// (stays open on invalid names), Escape cancels. Rebuilds the grid
+/// immediately through the passed widgets.
+fn edit_field(
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  initial: &str,
+  session: &SharedSession,
+  grid: &gtk::FlowBox,
+  status: &gtk::Label,
+  pal: &Palette,
+  refresh: &Refresh,
+) -> gtk::Entry {
+  let field = gtk::Entry::new();
+  field.set_text(initial);
+  field.set_halign(gtk::Align::Center);
+  field.set_width_chars(14);
+  field.set_max_width_chars(24);
+  let css = format!(
+    ".fd-edit {{ font-family: '{}'; font-size: 12px; color: {}; }}",
+    SF_PRO, "#1d1d1d"
+  );
+  crate::UIKit::widget::apply_css(&field, &css);
+  field.add_css_class("fd-edit");
+  field.connect_realize(|entry| {
+    entry.grab_focus();
+    entry.select_region(0, -1);
+  });
+
+  let disk_name = entry.name.clone();
+  let is_dir = entry.is_dir;
+  let is_app = entry.is_app;
+  let ext = entry.ext.clone();
+  let commit_base = base.to_path_buf();
+  let commit_session = session.clone();
+  let commit_grid = grid.clone();
+  let commit_status = status.clone();
+  let commit_pal = *pal;
+  let commit_session2 = session.clone();
+  let commit_refresh = refresh.clone();
+  field.connect_activate(move |entry| {
+    let disk = model::DirEntry {
+      name: disk_name.clone(),
+      is_dir,
+      is_app,
+      ext: ext.clone(),
+    };
+    if commit_rename(&commit_base, &disk, &entry.text()) {
+      if let Ok(mut guard) = commit_session.lock() {
+        *guard = None;
+      }
+      refresh_grid(
+        &commit_grid,
+        &commit_status,
+        &commit_pal,
+        &commit_base,
+        &commit_session2,
+        &commit_refresh,
+      );
+    }
+  });
+
+  let cancel_session = session.clone();
+  let cancel_grid = grid.clone();
+  let cancel_status = status.clone();
+  let cancel_pal = *pal;
+  let cancel_base = base.to_path_buf();
+  let cancel_session2 = session.clone();
+  let cancel_refresh = refresh.clone();
+  let keys = gtk::EventControllerKey::new();
+  keys.connect_key_pressed(move |_, key, _, _| {
+    if key == gdk4::Key::Escape {
+      if let Ok(mut guard) = cancel_session.lock() {
+        *guard = None;
+      }
+      refresh_grid(
+        &cancel_grid,
+        &cancel_status,
+        &cancel_pal,
+        &cancel_base,
+        &cancel_session2,
+        &cancel_refresh,
+      );
+      glib::Propagation::Stop
+    } else {
+      glib::Propagation::Proceed
+    }
+  });
+  field.add_controller(keys);
+
+  field
+}
+
 /// Empty-space context menu entries: New Folder, divider, Get Info,
-/// divider, New File submenu with Text File. Actions log for now.
-pub(crate) fn empty_space_menu() -> Vec<MenuEntry> {
+/// divider, New File submenu with Text File. Actions log for now,
+/// except New Folder which creates a folder and opens inline rename.
+pub(crate) fn empty_space_menu(session: &SharedSession, refresh: &Refresh) -> Vec<MenuEntry> {
+  let new_base = model::downloads_dir();
+  let new_session = session.clone();
+  let new_refresh = refresh.clone();
   vec![
-    MenuEntry::Item(
-      MenuItem::new(lang::t("context.new_folder"))
-        .on_activate(|| println!("Finder new folder")),
-    ),
+    MenuEntry::Item(MenuItem::new(lang::t("context.new_folder")).on_activate(move || {
+      if let Some(path) = create_folder(&new_base) {
+        if let Ok(mut guard) = new_session.lock() {
+          *guard = Some(EditSession { path });
+        }
+        new_refresh();
+      }
+      println!("Finder new folder");
+    })),
     MenuEntry::Divider,
     MenuEntry::Item(
       MenuItem::new(lang::t("context.get_info")).on_activate(|| println!("Finder get info")),
@@ -433,6 +617,7 @@ impl Widget for FinderRoot {
 
     let base = model::downloads_dir();
     let entries = model::list_downloads();
+    let session: SharedSession = Arc::new(Mutex::new(None));
 
     let grid = gtk::FlowBox::new();
     grid.set_selection_mode(gtk::SelectionMode::None);
@@ -450,9 +635,27 @@ impl Widget for FinderRoot {
       &format!(".finder-grid {{ background-color: {}; }}", pal.bg),
     );
     grid.add_css_class("finder-grid");
-    for entry in &entries {
-      grid.insert(&folder_cell(&base, entry, &pal), -1);
-    }
+    let status_label = gtk::Label::new(None);
+    status_label.set_use_markup(true);
+    status_label.set_halign(gtk::Align::Center);
+    // Menu callbacks are Send-bound and must not touch GTK widgets:
+    // they send a refresh signal that the 400ms tick below picks up.
+    let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<()>();
+    let refresh: Refresh = Arc::new(move || {
+      let _ = refresh_tx.send(());
+    });
+    let pal_c = pal;
+    let do_refresh = {
+      let grid_c = grid.clone();
+      let status_c = status_label.clone();
+      let base_c = base.clone();
+      let session_c = session.clone();
+      let refresh_c = refresh.clone();
+      move || {
+        refresh_grid(&grid_c, &status_c, &pal_c, &base_c, &session_c, &refresh_c);
+      }
+    };
+    refresh_grid(&grid, &status_label, &pal, &base, &session, &refresh);
 
     let scroll = gtk::ScrolledWindow::new();
     if entries.is_empty() {
@@ -476,10 +679,10 @@ impl Widget for FinderRoot {
     );
     scroll.add_css_class("finder-scroll");
 
-    // Right-click on empty space shows the context menu; file cells
-    // claim the press (see suppress_file_menu), so it stays hidden
-    // over files.
-    let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone())).entries(empty_space_menu());
+    // Right-click on empty space shows the context menu; the inner
+    // cell menus claim the press first, so it stays hidden over files.
+    let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
+      .entries(empty_space_menu(&session, &refresh));
     let menu_gtk = menu.to_gtk();
     menu_gtk.set_hexpand(true);
     menu_gtk.set_vexpand(true);
@@ -488,30 +691,31 @@ impl Widget for FinderRoot {
     let status = gtk::Box::new(gtk::Orientation::Vertical, 0);
     status.set_margin_top(6);
     status.set_margin_bottom(8);
-    let status_label = gtk::Label::new(None);
-    status_label.set_use_markup(true);
-    status_label.set_markup(&status_markup(&entries, &pal));
-    status_label.set_halign(gtk::Align::Center);
     status.append(&status_label);
     detail.append(&status);
 
-    // Live updates: a notify watcher signals changes in ~/Downloads/;
-    // a 400ms main-thread tick drains bursts and rebuilds the grid once.
-    if let Some((watcher, rx)) = crate::watch::watch_dir(&base) {
+    // Live updates: the notify watcher and the menu/edit refresh
+    // signal share one 400ms main-thread tick that drains bursts and
+    // rebuilds the grid once.
+    let watch_rx = crate::watch::watch_dir(&base).map(|(watcher, rx)| {
       FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
-      let grid_watch = grid.clone();
-      let status_watch = status_label.clone();
-      glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
-        let mut dirty = false;
+      rx
+    });
+    glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+      let mut dirty = false;
+      if let Some(rx) = &watch_rx {
         while rx.try_recv().is_ok() {
           dirty = true;
         }
-        if dirty {
-          refresh_grid(&grid_watch, &status_watch, &pal);
-        }
-        glib::ControlFlow::Continue
-      });
-    }
+      }
+      while refresh_rx.try_recv().is_ok() {
+        dirty = true;
+      }
+      if dirty {
+        do_refresh();
+      }
+      glib::ControlFlow::Continue
+    });
 
     outer.append(&detail);
     outer.upcast()
@@ -532,16 +736,22 @@ fn status_markup(entries: &[model::DirEntry], pal: &Palette) -> String {
 }
 
 /// Rebuild the grid and status line from the live directory.
-fn refresh_grid(grid: &gtk::FlowBox, status: &gtk::Label, pal: &Palette) {
+fn refresh_grid(
+  grid: &gtk::FlowBox,
+  status: &gtk::Label,
+  pal: &Palette,
+  base: &std::path::Path,
+  session: &SharedSession,
+  refresh: &Refresh,
+) {
   let mut child = grid.first_child();
   while let Some(widget) = child {
     child = widget.next_sibling();
     grid.remove(&widget);
   }
-  let base = model::downloads_dir();
   let entries = model::list_downloads();
   for entry in &entries {
-    grid.insert(&folder_cell(&base, entry, pal), -1);
+    grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status), -1);
   }
   status.set_markup(&status_markup(&entries, pal));
 }
@@ -557,9 +767,16 @@ mod tests {
     }
   }
 
+  fn test_context() -> (SharedSession, Refresh, std::path::PathBuf) {
+    let session: SharedSession = Arc::new(Mutex::new(None));
+    let refresh: Refresh = Arc::new(|| {});
+    (session, refresh, std::env::temp_dir())
+  }
+
   #[test]
   fn empty_space_menu_structure() {
-    let entries = empty_space_menu();
+    let (session, refresh, _) = test_context();
+    let entries = empty_space_menu(&session, &refresh);
     assert_eq!(entries.len(), 5);
     assert!(matches!(entries[1], MenuEntry::Divider));
     assert!(matches!(entries[3], MenuEntry::Divider));
@@ -575,7 +792,14 @@ mod tests {
 
   #[test]
   fn file_menu_structure() {
-    let entries = file_menu_entries("wallpaper");
+    let (session, refresh, base) = test_context();
+    let entry = model::DirEntry {
+      name: "wallpaper.jpg".to_string(),
+      is_dir: false,
+      is_app: false,
+      ext: "jpg".to_string(),
+    };
+    let entries = file_menu_entries(&base, &entry, &session, &refresh);
     assert_eq!(entries.len(), 14);
     assert_eq!(item_label(&entries[0]), Some(lang::t("context.open").as_str()));
     match &entries[1] {

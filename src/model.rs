@@ -112,6 +112,27 @@ pub fn display_name(name: &str, is_dir: bool) -> String {
     .to_string()
 }
 
+/// On-disk name for an inline rename. Rejects empty names and path
+/// separators. Directories keep the typed text (`.app` bundles keep
+/// their suffix); files keep their extension unless the typed text
+/// already carries one.
+pub fn resolve_new_name(entry: &DirEntry, typed: &str) -> Option<String> {
+  let text = typed.trim();
+  if text.is_empty() || text.contains('/') || text.contains('\\') || text.contains('\0') {
+    return None;
+  }
+  if entry.is_dir {
+    if entry.is_app && !text.to_lowercase().ends_with(".app") {
+      return Some(format!("{text}.app"));
+    }
+    return Some(text.to_string());
+  }
+  if text.contains('.') || entry.ext.is_empty() {
+    return Some(text.to_string());
+  }
+  Some(format!("{text}.{}", entry.ext))
+}
+
 /// List a directory, directories first then files, each alphabetical
 /// (case-insensitive). Windows `Zone.Identifier` marker files are
 /// skipped (download metadata, not user files; WSL exposes them as
@@ -185,6 +206,42 @@ mod tests {
   fn app_display_name_strips_suffix() {
     assert_eq!(display_name("Demo.app", true), "Demo");
     assert_eq!(display_name("Demo.app", false), "Demo");
+  }
+
+  fn test_entry(name: &str, is_dir: bool, is_app: bool, ext: &str) -> DirEntry {
+    DirEntry {
+      name: name.to_string(),
+      is_dir,
+      is_app,
+      ext: ext.to_string(),
+    }
+  }
+
+  #[test]
+  fn resolve_new_name_rejects_bad_input() {
+    let file = test_entry("photo.png", false, false, "png");
+    assert!(resolve_new_name(&file, "").is_none());
+    assert!(resolve_new_name(&file, "   ").is_none());
+    assert!(resolve_new_name(&file, "a/b").is_none());
+    assert!(resolve_new_name(&file, "a\\b").is_none());
+  }
+
+  #[test]
+  fn resolve_new_name_keeps_file_extension() {
+    let file = test_entry("photo.png", false, false, "png");
+    assert_eq!(resolve_new_name(&file, "wallpaper"), Some("wallpaper.png".to_string()));
+    assert_eq!(resolve_new_name(&file, "icon.svg"), Some("icon.svg".to_string()));
+    let plain = test_entry("README", false, false, "");
+    assert_eq!(resolve_new_name(&plain, "NOTES"), Some("NOTES".to_string()));
+  }
+
+  #[test]
+  fn resolve_new_name_keeps_app_suffix() {
+    let bundle = test_entry("Demo.app", true, true, "");
+    assert_eq!(resolve_new_name(&bundle, "Other"), Some("Other.app".to_string()));
+    assert_eq!(resolve_new_name(&bundle, "Other.app"), Some("Other.app".to_string()));
+    let dir = test_entry("Docs", true, false, "");
+    assert_eq!(resolve_new_name(&dir, "Files"), Some("Files".to_string()));
   }
 
   #[test]

@@ -108,8 +108,29 @@ Returns `~/Downloads/` (`HOME` env, `/tmp` fallback).
 pub fn display_name(name: &str, is_dir: bool) -> String
 ```
 
-Directories keep their name; files lose the extension
-(`archive.tar.gz` shows as `archive.tar`).
+Directories keep their name (`.app` bundles lose the suffix);
+files lose the extension (`archive.tar.gz` shows as `archive.tar`).
+
+### `resolve_new_name`
+
+```rust
+pub fn resolve_new_name(entry: &DirEntry, typed: &str) -> Option<String>
+```
+
+On-disk name for an inline rename. Rejects empty names and path
+separators (`None` keeps the field open). Directories keep the typed
+text (`.app` bundles keep their suffix); files keep their extension
+unless the typed text already carries one.
+
+### `create_folder`
+
+```rust
+pub fn create_folder(base: &Path) -> Option<PathBuf>
+```
+
+Creates a uniquely named folder (`folder.untitled`, numbered when
+taken). Found in `src/views/finder.rs`; the caller opens inline
+rename on the result.
 
 ### `list_dir`
 
@@ -216,7 +237,7 @@ Right-clicking empty grid space shows a TontooUI `ContextMenu`
 
 | Order | Entry |
 |---|---|
-| 1 | `context.new_folder` (New Folder, logs for now) |
+| 1 | `context.new_folder` (New Folder: creates `folder.untitled`, numbered when taken, then opens inline rename) |
 | 2 | Divider |
 | 3 | `context.get_info` (Get Info, logs for now) |
 | 4 | Divider |
@@ -241,8 +262,9 @@ over files.
 | 3 | Divider |
 | 4 | `context.move_to_trash` (Move to Trash, logs for now) |
 | 5 | Divider |
-| 6 | `context.get_info`, `context.rename`, `context.compress`, `context.duplicate` (all log for now) |
-| 7 | `context.share` (Share) with trailing `arrowtriangle.forward.fill`, logs for now |
+| 6 | `context.get_info` (Get Info, logs for now), `context.rename` (Rename: inline edit below the icon, Enter commits, Escape cancels) |
+| 7 | `context.compress`, `context.duplicate` (both log for now) |
+| 8 | `context.share` (Share) with trailing `arrowtriangle.forward.fill`, logs for now |
 | 8 | Divider |
 | 9 | `context.copy` (`Copy "{name}"` with the file name, logs for now) |
 | 10 | Divider |
@@ -334,6 +356,7 @@ localized `name` in `Info.tontoo`). Keep both locations in sync.
 | `detail.search` | `Search` | `Suchen` |
 | `detail.empty` | `Downloads is empty` | `Downloads ist leer` |
 | `detail.empty.hint` | `Files you download appear here.` | `Heruntergeladene Dateien erscheinen hier.` |
+| `folder.untitled` | `Untitled Folder` | `Unbenannter Ordner` |
 | `context.new_folder` | `New Folder` | `Neuer Ordner` |
 | `context.get_info` | `Get Info` | `Informationen` |
 | `context.new_file` | `New File` | `Neue Datei` |
