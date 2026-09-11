@@ -53,7 +53,7 @@ field in a `gtk::Box` row:
 
 | Group | Items |
 |---|---|
-| Navigation | `chevron.left` (back), `chevron.right` (forward) |
+| Navigation | `chevron.backward` (back), `chevron.forward` (forward) |
 | View switch | `square.grid.2x2` (icons), `list.bullet` (list), `rectangle.split.3x1` (columns), `rectangle.stack` (gallery) |
 | Actions | `arrow.up.arrow.down` (sort), `square.and.arrow.up` (share), `tag` (tag) |
 | Search | `TextInput` with `detail.search` placeholder, 170px wide |

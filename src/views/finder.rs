@@ -259,8 +259,8 @@ impl Widget for FinderRoot {
     toolbar_row.set_margin_end(12);
 
     let nav = Toolbar::new()
-      .item(ToolbarItem::new("chevron.left").on_click(|| println!("Finder back")))
-      .item(ToolbarItem::new("chevron.right").on_click(|| println!("Finder forward")));
+      .item(ToolbarItem::new("chevron.backward").on_click(|| println!("Finder back")))
+      .item(ToolbarItem::new("chevron.forward").on_click(|| println!("Finder forward")));
     toolbar_row.append(&nav.to_gtk());
 
     let title = markup_label(&lang::t("sidebar.downloads"), 15, "bold", pal.fg);
