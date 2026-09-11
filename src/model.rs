@@ -69,6 +69,7 @@ pub fn file_kind(ext: &str) -> FileKind {
 pub fn document_icon(ext: &str) -> Option<&'static str> {
   Some(match ext {
     "css" | "scss" | "sass" | "less" => "css.png",
+    "exe" | "msi" => "exe.png",
     "doc" | "dot" | "odt" | "rtf" => "doc.png",
     "docx" | "docm" | "dotx" => "docx.png",
     "html" | "htm" | "xhtml" | "mhtml" => "html.png",
@@ -244,7 +245,9 @@ mod tests {
     assert_eq!(document_icon("html"), Some("html.png"));
     assert_eq!(document_icon("css"), Some("css.png"));
     assert_eq!(document_icon("java"), Some("java.png"));
-    assert_eq!(document_icon("exe"), None);
+    assert_eq!(document_icon("exe"), Some("exe.png"));
+    assert_eq!(document_icon("msi"), Some("exe.png"));
+    assert_eq!(document_icon("dll"), None);
   }
 
   #[test]

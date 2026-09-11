@@ -144,7 +144,8 @@ slides (`ppt`, `pptx`, `pps`, `ppsx`, `odp`) use `ppt.png`, Word
 (`docx`, `docm`, `dotx`) uses `docx.png`, text-like (`txt`, `text`,
 `log`, `ini`, `cfg`, `conf`, `toml`, `yaml`, `yml`, `xml`) uses
 `txt.png`, shells (`sh`, `bash`, `zsh`, `fish`, `bat`, `cmd`, `ps1`)
-use `sh.png`, plus `css`, `doc`, `html`, `java`, `md`, `pdf`, `py`,
+use `sh.png`, Windows executables (`exe`, `msi`) use `exe.png`, plus
+`css`, `doc`, `html`, `java`, `md`, `pdf`, `py`,
 `rs` icons. Returns `None` when no specific icon exists (caller uses
 `basis.png`).
 

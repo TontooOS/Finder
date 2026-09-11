@@ -276,6 +276,7 @@ mod tests {
         "css.png",
         "doc.png",
         "docx.png",
+        "exe.png",
         "html.png",
         "java.png",
         "javascript.png",
