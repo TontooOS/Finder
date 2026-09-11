@@ -16,6 +16,8 @@ From left to right the window contains:
 
 ```rust
 let mut app = App::with_delegate(lang::t("app.title"), 1080, 720, FinderDelegate);
+// No extra window bar: the sidebar draws the only traffic lights.
+app.no_window_bar();
 app.auto_color_scheme(); // live Dark/Light follow
 app.run();
 ```
