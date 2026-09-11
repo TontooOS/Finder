@@ -64,17 +64,21 @@ filtering are later steps.
 ## Downloads grid
 
 A `gtk::FlowBox` (4-8 columns, homogeneous) shows the live entries of
-`~/Downloads/` from `src/model.rs::list_downloads()`. Directories
-render the default `folder.svg` icon from
-`Resources/foldericons/scalable/` (full-color SVG rendered by GTK
-through librsvg, 64px); files render as a plain text label with the
-extension stripped and no icon. Entries sort directories-first, then
-alphabetically (case-insensitive). An empty or unreadable directory
-shows a `ContentUnavailableView` (`detail.empty`,
-`detail.empty.hint`). When an icon file is missing the cell falls back
-to Tahoe CSS artwork (`.fd-tab` plus `.fd-body` in Finder blue
-`#7fbeec` with edge `#5ea3d8`), so the grid never renders an empty
-cell.
+`~/Downloads/` from `src/model.rs::list_downloads()`. Windows
+`Zone.Identifier` marker files are skipped. Directories render the
+default `folder.svg` icon from `Resources/foldericons/scalable/`
+(full-color SVG rendered by GTK through librsvg, 64px). Files render
+by kind: images show the picture itself, videos show the cached
+first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
+size plus mtime) with the themed `blue-folder-videos.svg` fallback
+while `ffmpeg` is missing, audio files show `blue-folder-music.svg`.
+Other files show no icon, only the name with the extension stripped.
+Entries sort directories-first, then alphabetically
+(case-insensitive). An empty or unreadable directory shows a
+`ContentUnavailableView` (`detail.empty`, `detail.empty.hint`). When
+an icon file is missing the cell falls back to Tahoe CSS artwork
+(`.fd-tab` plus `.fd-body` in Finder blue `#7fbeec` with edge
+`#5ea3d8`), so the grid never renders an empty cell.
 
 `src/icons.rs` resolves `Resources/foldericons/<size>/<file>` across
 dev checkouts (`Resources/`), `.app` bundles and installed files
@@ -106,7 +110,17 @@ pub fn list_dir(path: &Path) -> Vec<DirEntry>
 ```
 
 Lists a directory, directories first then files, each alphabetical
-(case-insensitive). Returns an empty list when unreadable.
+(case-insensitive). Skips `*.Zone.Identifier` marker files. Returns
+an empty list when unreadable.
+
+### `file_kind`
+
+```rust
+pub fn file_kind(ext: &str) -> FileKind
+```
+
+Classifies a lowercase extension as `Image`, `Video`, `Audio` or
+`Other`, driving the grid preview.
 
 ### `list_downloads`
 
@@ -125,6 +139,18 @@ pub fn folder_icon(file: &str) -> Option<PathBuf>
 
 Resolves a `scalable/` icon file. Returns `None` when no layout holds
 the file.
+
+### `video_thumb`
+
+```rust
+pub fn video_thumb(source: &Path) -> Option<PathBuf>
+```
+
+First-second frame of a video as a cached PNG (`ffmpeg -ss 1`,
+`scale=320:-1`). Returns a fresh extraction or the cached file.
+Returns `None` when `ffmpeg` is missing or extraction fails (caller
+shows the themed video icon). No extra icon pack is needed for audio:
+`audio_icon()` resolves the shipped `blue-folder-music.svg`.
 
 ### `item_count`
 

@@ -15,6 +15,43 @@ pub struct DirEntry {
   pub name: String,
   /// True for directories, false for files.
   pub is_dir: bool,
+  /// Lowercase extension without dot (`jpg`, `mp4`, `mp3`), empty for
+  /// directories and extensionless files.
+  pub ext: String,
+}
+
+/// File kind driving the grid preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+  Image,
+  Video,
+  Audio,
+  Other,
+}
+
+const IMAGE_EXTS: &[&str] = &[
+  "png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "tif", "tiff", "avif", "heic", "ico",
+];
+
+const VIDEO_EXTS: &[&str] = &[
+  "mp4", "mkv", "avi", "mov", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "3gp", "ogv",
+];
+
+const AUDIO_EXTS: &[&str] = &[
+  "mp3", "wav", "flac", "ogg", "oga", "m4a", "opus", "aac", "wma",
+];
+
+/// Classify a lowercase extension.
+pub fn file_kind(ext: &str) -> FileKind {
+  if IMAGE_EXTS.contains(&ext) {
+    FileKind::Image
+  } else if VIDEO_EXTS.contains(&ext) {
+    FileKind::Video
+  } else if AUDIO_EXTS.contains(&ext) {
+    FileKind::Audio
+  } else {
+    FileKind::Other
+  }
 }
 
 /// The listed directory: `~/Downloads/`.
@@ -38,16 +75,32 @@ pub fn display_name(name: &str, is_dir: bool) -> String {
 }
 
 /// List a directory, directories first then files, each alphabetical
-/// (case-insensitive). Returns an empty list when unreadable.
+/// (case-insensitive). Windows `Zone.Identifier` marker files are
+/// skipped (download metadata, not user files). Returns an empty list
+/// when unreadable.
 pub fn list_dir(path: &Path) -> Vec<DirEntry> {
   let Ok(read) = std::fs::read_dir(path) else {
     return Vec::new();
   };
   let mut entries: Vec<DirEntry> = read
     .filter_map(|entry| entry.ok())
-    .map(|entry| DirEntry {
-      name: entry.file_name().to_string_lossy().into_owned(),
-      is_dir: entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false),
+    .map(|entry| {
+      let name = entry.file_name().to_string_lossy().into_owned();
+      (entry, name)
+    })
+    .filter(|(_, name)| !name.to_lowercase().ends_with(".zone.identifier"))
+    .map(|(entry, name)| {
+      let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+      let ext = if is_dir {
+        String::new()
+      } else {
+        Path::new(&name)
+          .extension()
+          .and_then(|ext| ext.to_str())
+          .unwrap_or("")
+          .to_lowercase()
+      };
+      DirEntry { name, is_dir, ext }
     })
     .collect();
   entries.sort_by(|a, b| {
@@ -107,6 +160,34 @@ mod tests {
       .map(|entry| display_name(&entry.name, entry.is_dir))
       .collect();
     assert_eq!(shown, vec!["docs", "Alpha", "beta", "README"]);
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn file_kind_classifies_extensions() {
+    assert_eq!(file_kind("jpg"), FileKind::Image);
+    assert_eq!(file_kind("png"), FileKind::Image);
+    assert_eq!(file_kind("mp4"), FileKind::Video);
+    assert_eq!(file_kind("mkv"), FileKind::Video);
+    assert_eq!(file_kind("mp3"), FileKind::Audio);
+    assert_eq!(file_kind("flac"), FileKind::Audio);
+    assert_eq!(file_kind("pdf"), FileKind::Other);
+    assert_eq!(file_kind(""), FileKind::Other);
+  }
+
+  #[test]
+  fn listing_skips_zone_identifier_markers() {
+    let base = std::env::temp_dir().join(format!("finder-test-zone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("wallpaper.jpg"), b"x").unwrap();
+    std::fs::write(base.join("wallpaper.jpg.Zone.Identifier"), b"x").unwrap();
+
+    let entries = list_dir(&base);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "wallpaper.jpg");
+    assert_eq!(entries[0].ext, "jpg");
 
     let _ = std::fs::remove_dir_all(&base);
   }

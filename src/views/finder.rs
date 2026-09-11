@@ -116,16 +116,45 @@ fn folder_art() -> gtk::Box {
   art
 }
 
-fn folder_cell(entry: &model::DirEntry, pal: &Palette) -> gtk::Box {
+fn preview_image(path: &std::path::Path) -> gtk::Box {
+  let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+  holder.set_halign(gtk::Align::Center);
+  let image = gtk::Image::from_file(path);
+  image.set_pixel_size(64);
+  image.set_halign(gtk::Align::Center);
+  holder.append(&image);
+  holder
+}
+
+fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -> gtk::Box {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
 
-  // Directories show the default folder icon; files show no icon, only
-  // the name without extension.
+  // Directories show the default folder icon. Images show the picture
+  // itself, videos show the cached first-second frame (themed icon
+  // while ffmpeg is missing), audio files show the music icon. Other
+  // files show no icon, only the name without extension.
   if entry.is_dir {
     cell.append(&folder_icon_art());
+  } else {
+    let full = base.join(&entry.name);
+    match model::file_kind(&entry.ext) {
+      model::FileKind::Image => cell.append(&preview_image(&full)),
+      model::FileKind::Video => match icons::video_thumb(&full) {
+        Some(thumb) => cell.append(&preview_image(&thumb)),
+        None => match icons::video_icon() {
+          Some(icon) => cell.append(&preview_image(&icon)),
+          None => cell.append(&folder_art()),
+        },
+      },
+      model::FileKind::Audio => match icons::audio_icon() {
+        Some(icon) => cell.append(&preview_image(&icon)),
+        None => cell.append(&folder_art()),
+      },
+      model::FileKind::Other => {}
+    }
   }
 
   let shown = model::display_name(&entry.name, entry.is_dir);
@@ -255,6 +284,7 @@ impl Widget for FinderRoot {
     sep.add_css_class("finder-sep");
     detail.append(&sep);
 
+    let base = model::downloads_dir();
     let entries = model::list_downloads();
 
     let grid = gtk::FlowBox::new();
@@ -274,7 +304,7 @@ impl Widget for FinderRoot {
     );
     grid.add_css_class("finder-grid");
     for entry in &entries {
-      grid.insert(&folder_cell(entry, &pal), -1);
+      grid.insert(&folder_cell(&base, entry, &pal), -1);
     }
 
     let scroll = gtk::ScrolledWindow::new();
