@@ -69,7 +69,9 @@ or ZIP archive) show the app icon rendered once through CoreIcon
 size plus mtime). Directories render the
 default `folder.svg` icon from `Resources/foldericons/scalable/`
 (full-color SVG rendered by GTK through librsvg, 64px). Files render
-by kind: images show the picture itself, videos show the cached
+by kind: images show the picture itself (rounded corners baked into the alpha channel at 128px
+backing for the 64px display size, since GTK CSS `border-radius`
+does not clip image content), videos show the cached
 first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
 size plus mtime) with the themed `blue-folder-videos.svg` fallback
 while `ffmpeg` is missing, audio files (mp3, wav, flac, ogg, oga,
@@ -78,9 +80,9 @@ archives (zip, rar, 7z, tar, gz, gzip, bz2) show
 `Resources/extensionicons/zip.png`, and other files show their
 document icon from `Resources/extensionicons/` (`basis.png` when no
 specific icon exists).
-Other files show no icon, only the name with the extension stripped.
 Entries sort directories-first, then alphabetically
-(case-insensitive). An empty or unreadable directory shows a
+(case-insensitive). A `notify` watcher (`src/watch.rs`) rebuilds the
+grid live when the folder changes. An empty or unreadable directory shows a
 `ContentUnavailableView` (`detail.empty`, `detail.empty.hint`). When
 an icon file is missing the cell falls back to Tahoe CSS artwork
 (`.fd-tab` plus `.fd-body` in Finder blue `#7fbeec` with edge
@@ -174,8 +176,38 @@ pub fn video_thumb(source: &Path) -> Option<PathBuf>
 First-second frame of a video as a cached PNG (`ffmpeg -ss 1`,
 `scale=320:-1`). Returns a fresh extraction or the cached file.
 Returns `None` when `ffmpeg` is missing or extraction fails (caller
-shows the themed video icon). No extra icon pack is needed for audio:
-`audio_icon()` resolves the shipped `blue-folder-music.svg`.
+shows the themed video icon). Audio files resolve
+`Resources/extensionicons/audio.png` via `audio_icon()`.
+
+### `cover_square`
+
+```rust
+pub fn cover_square(img: &DynamicImage, size: u32) -> RgbaImage
+```
+
+Aspect-fill resize plus center crop to an exact square for photo and
+video previews.
+
+### `round_corners`
+
+```rust
+pub fn round_corners(img: &mut RgbaImage, radius: u32)
+```
+
+Rounds image corners in place (transparent outside the radius). GTK
+CSS `border-radius` does not clip image content, so previews bake
+the mask into the alpha channel.
+
+### `watch_dir`
+
+```rust
+pub fn watch_dir(path: &Path) -> Option<(RecommendedWatcher, Receiver<()>)>
+```
+
+Watches a directory (non-recursive) with `notify` and signals per
+file system event. The UI drains the channel on a 400ms main-thread
+tick and rebuilds the grid once per burst, so the Finder view stays
+in sync with the folder. Returns `None` when watching fails.
 
 ### `app_icon`
 

@@ -255,6 +255,55 @@ pub fn video_thumb(source: &Path) -> Option<PathBuf> {
   }
 }
 
+/// Aspect-fill resize plus center crop to an exact square (photo and
+/// video grid previews).
+pub fn cover_square(img: &image::DynamicImage, size: u32) -> image::RgbaImage {
+  let size = size.max(1);
+  let (w, h) = (img.width().max(1), img.height().max(1));
+  let scale = size as f32 / w.min(h) as f32;
+  let (nw, nh) = (
+    (w as f32 * scale).ceil() as u32,
+    (h as f32 * scale).ceil() as u32,
+  );
+  let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3);
+  let rgba = resized.to_rgba8();
+  let (rw, rh) = (rgba.width(), rgba.height());
+  let x = rw.saturating_sub(size) / 2;
+  let y = rh.saturating_sub(size) / 2;
+  image::imageops::crop_imm(&rgba, x, y, size.min(rw), size.min(rh)).to_image()
+}
+
+/// Round the corners of an image in place (transparent outside the
+/// radius). GTK CSS `border-radius` does not clip image content, so
+/// previews bake the mask into the alpha channel.
+pub fn round_corners(img: &mut image::RgbaImage, radius: u32) {
+  let (w, h) = (img.width() as i64, img.height() as i64);
+  let r = (radius as i64).min(w / 2).min(h / 2);
+  if r <= 0 {
+    return;
+  }
+  for (x, y, px) in img.enumerate_pixels_mut() {
+    let (x, y) = (x as i64, y as i64);
+    let dx = if x < r {
+      r - 1 - x
+    } else if x >= w - r {
+      x - (w - r)
+    } else {
+      -1
+    };
+    let dy = if y < r {
+      r - 1 - y
+    } else if y >= h - r {
+      y - (h - r)
+    } else {
+      -1
+    };
+    if dx >= 0 && dy >= 0 && dx * dx + dy * dy >= r * r {
+      px[3] = 0;
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -422,5 +471,32 @@ mod tests {
     std::fs::create_dir_all(&bundle).unwrap();
     assert!(app_icon(&bundle).is_none());
     let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn cover_square_crops_center() {
+    let wide = image::DynamicImage::new_rgba8(200, 100);
+    let sq = cover_square(&wide, 64);
+    assert_eq!((sq.width(), sq.height()), (64, 64));
+  }
+
+  #[test]
+  fn round_corners_clears_only_corners() {
+    let mut img = image::RgbaImage::from_pixel(32, 32, image::Rgba([255, 0, 0, 255]));
+    round_corners(&mut img, 10);
+    assert_eq!(img.get_pixel(0, 0)[3], 0);
+    assert_eq!(img.get_pixel(31, 0)[3], 0);
+    assert_eq!(img.get_pixel(0, 31)[3], 0);
+    assert_eq!(img.get_pixel(31, 31)[3], 0);
+    assert_eq!(img.get_pixel(16, 16)[3], 255);
+    assert_eq!(img.get_pixel(16, 0)[3], 255);
+    assert_eq!((img.width(), img.height()), (32, 32));
+  }
+
+  #[test]
+  fn round_corners_zero_radius_keeps_image() {
+    let mut img = image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]));
+    round_corners(&mut img, 0);
+    assert!(img.pixels().all(|px| px[3] == 255));
   }
 }

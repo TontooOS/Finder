@@ -9,6 +9,7 @@ mod icons;
 mod lang;
 mod model;
 mod views;
+mod watch;
 
 sdk::preinclude!();
 

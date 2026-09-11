@@ -17,12 +17,19 @@ use crate::TontooUI::{
 use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
 use gtk::prelude::*;
+use std::cell::RefCell;
+
+thread_local! {
+  /// Keeps the downloads watcher alive for the app lifetime.
+  static FOLDER_WATCHER: RefCell<Option<notify::RecommendedWatcher>> = RefCell::new(None);
+}
 
 const SF_PRO: &str = "SF Pro Display";
 const SIDEBAR_WIDTH: f32 = 240.0;
 const FOLDER_BLUE: &str = "#7fbeec";
 const FOLDER_EDGE: &str = "#5ea3d8";
 
+#[derive(Clone, Copy)]
 struct Palette {
   bg: &'static str,
   fg: &'static str,
@@ -116,10 +123,47 @@ fn folder_art() -> gtk::Box {
 fn preview_image(path: &std::path::Path) -> gtk::Box {
   let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
   holder.set_halign(gtk::Align::Center);
+  holder.append(&preview_art(path, false));
+  holder
+}
+
+/// Grid artwork for one file: plain `GtkImage` for icons, or a
+/// rounded-corner texture for photos and video frames (GTK CSS
+/// `border-radius` does not clip image content). Falls back to the
+/// plain image when rounding fails (covers SVGs, which the `image`
+/// crate cannot decode).
+fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
+  if round {
+    if let Ok(img) = image::open(path) {
+      // 128px backing for the 64px display size (sharp on HiDPI).
+      let mut square = icons::cover_square(&img, 128);
+      icons::round_corners(&mut square, 20);
+      let (w, h) = square.dimensions();
+      let bytes = glib::Bytes::from(square.as_raw());
+      let texture = gdk4::MemoryTexture::new(
+        w as i32,
+        h as i32,
+        gdk4::MemoryFormat::R8g8b8a8,
+        &bytes,
+        (w * 4) as usize,
+      );
+      let preview = gtk::Image::from_paintable(Some(&texture));
+      preview.set_pixel_size(64);
+      preview.set_halign(gtk::Align::Center);
+      return preview.upcast();
+    }
+  }
   let image = gtk::Image::from_file(path);
   image.set_pixel_size(64);
   image.set_halign(gtk::Align::Center);
-  holder.append(&image);
+  image.upcast()
+}
+
+/// Rounded photo/video preview in a centered holder box.
+fn rounded_preview(path: &std::path::Path) -> gtk::Box {
+  let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+  holder.set_halign(gtk::Align::Center);
+  holder.append(&preview_art(path, true));
   holder
 }
 
@@ -145,9 +189,9 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   } else {
     let full = base.join(&entry.name);
     match model::file_kind(&entry.ext) {
-      model::FileKind::Image => cell.append(&preview_image(&full)),
+      model::FileKind::Image => cell.append(&rounded_preview(&full)),
       model::FileKind::Video => match icons::video_thumb(&full) {
-        Some(thumb) => cell.append(&preview_image(&thumb)),
+        Some(thumb) => cell.append(&rounded_preview(&thumb)),
         None => match icons::video_icon() {
           Some(icon) => cell.append(&preview_image(&icon)),
           None => cell.append(&folder_art()),
@@ -330,15 +374,60 @@ impl Widget for FinderRoot {
     let status = gtk::Box::new(gtk::Orientation::Vertical, 0);
     status.set_margin_top(6);
     status.set_margin_bottom(8);
-    let line = lang::t("status.line")
-      .replace("{count}", &model::item_count(&entries).to_string())
-      .replace("{free}", &lang::t("status.free"));
-    let status_label = markup_label(&line, 11, "normal", pal.secondary);
+    let status_label = gtk::Label::new(None);
+    status_label.set_use_markup(true);
+    status_label.set_markup(&status_markup(&entries, &pal));
     status_label.set_halign(gtk::Align::Center);
     status.append(&status_label);
     detail.append(&status);
 
+    // Live updates: a notify watcher signals changes in ~/Downloads/;
+    // a 400ms main-thread tick drains bursts and rebuilds the grid once.
+    if let Some((watcher, rx)) = crate::watch::watch_dir(&base) {
+      FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
+      let grid_watch = grid.clone();
+      let status_watch = status_label.clone();
+      glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+        let mut dirty = false;
+        while rx.try_recv().is_ok() {
+          dirty = true;
+        }
+        if dirty {
+          refresh_grid(&grid_watch, &status_watch, &pal);
+        }
+        glib::ControlFlow::Continue
+      });
+    }
+
     outer.append(&detail);
     outer.upcast()
   }
+}
+
+/// Status line markup for the current entries.
+fn status_markup(entries: &[model::DirEntry], pal: &Palette) -> String {
+  let line = lang::t("status.line")
+    .replace("{count}", &model::item_count(entries).to_string())
+    .replace("{free}", &lang::t("status.free"));
+  format!(
+    "<span font_desc=\"{} normal 11\" foreground=\"{}\">{}</span>",
+    SF_PRO,
+    pal.secondary,
+    glib::markup_escape_text(&line),
+  )
+}
+
+/// Rebuild the grid and status line from the live directory.
+fn refresh_grid(grid: &gtk::FlowBox, status: &gtk::Label, pal: &Palette) {
+  let mut child = grid.first_child();
+  while let Some(widget) = child {
+    child = widget.next_sibling();
+    grid.remove(&widget);
+  }
+  let base = model::downloads_dir();
+  let entries = model::list_downloads();
+  for entry in &entries {
+    grid.insert(&folder_cell(&base, entry, pal), -1);
+  }
+  status.set_markup(&status_markup(&entries, pal));
 }
