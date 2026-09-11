@@ -74,7 +74,8 @@ default `folder.svg` icon from `Resources/foldericons/scalable/`
 by kind: images show the picture itself, videos show the cached
 first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
 size plus mtime) with the themed `blue-folder-videos.svg` fallback
-while `ffmpeg` is missing, audio files show `blue-folder-music.svg`,
+while `ffmpeg` is missing, audio files (mp3, wav, flac, ogg, oga,
+m4a, opus, aac, wma) show `Resources/extensionicons/audio.png`,
 archives (zip, rar, 7z, tar, gz, gzip, bz2) show
 `Resources/extensionicons/zip.png`, and other files show their
 document icon from `Resources/extensionicons/` (`basis.png` when no
@@ -195,10 +196,10 @@ or rendering fails (caller shows the default folder artwork).
 ### `item_count`
 
 ```rust
-pub fn item_count() -> usize
+pub fn item_count(entries: &[DirEntry]) -> usize
 ```
 
-Returns `folders().len()` (currently 17). Used by the status line.
+Returns the entry count. Used by the status line.
 
 ## Status line
 

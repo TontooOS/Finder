@@ -167,9 +167,9 @@ pub fn app_icon(entry: &Path) -> Option<PathBuf> {
   Some(cached)
 }
 
-/// Themed icon for audio files (`scalable/blue-folder-music.svg`).
+/// Themed icon for audio files (`Resources/extensionicons/audio.png`).
 pub fn audio_icon() -> Option<PathBuf> {
-  folder_icon("blue-folder-music.svg")
+  extension_icon("audio.png")
 }
 
 /// Themed fallback icon for video files without a cached thumbnail
@@ -271,6 +271,7 @@ mod tests {
       assert!(video_icon().is_some());
       assert!(archive_icon().is_some());
       for file in [
+        "audio.png",
         "basis.png",
         "css.png",
         "doc.png",
