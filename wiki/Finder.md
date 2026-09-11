@@ -65,7 +65,10 @@ filtering are later steps.
 
 A `gtk::FlowBox` (4-8 columns, homogeneous) shows the live entries of
 `~/Downloads/` from `src/model.rs::list_downloads()`. Windows
-`Zone.Identifier` marker files are skipped. Directories render the
+`Zone.Identifier` marker files are skipped. `.app` bundles (directory
+or ZIP archive) show the app icon rendered once through CoreIcon
+(`AppIcon`, original colors, cached 192px PNG in the temp dir keyed by
+size plus mtime). Directories render the
 default `folder.svg` icon from `Resources/foldericons/scalable/`
 (full-color SVG rendered by GTK through librsvg, 64px). Files render
 by kind: images show the picture itself, videos show the cached
@@ -151,6 +154,21 @@ First-second frame of a video as a cached PNG (`ffmpeg -ss 1`,
 Returns `None` when `ffmpeg` is missing or extraction fails (caller
 shows the themed video icon). No extra icon pack is needed for audio:
 `audio_icon()` resolves the shipped `blue-folder-music.svg`.
+
+### `app_icon`
+
+```rust
+pub fn app_icon(entry: &Path) -> Option<PathBuf>
+```
+
+App icon for a `.app` entry, rendered once through CoreIcon and
+cached. Bundle directories resolve the raw icon from
+`Resources/icon.png`, `App/icon.png`, `Resources/app_icon.png`, else
+the `icon` field of `tontoo.proj`. `.app` ZIP archives (TBuild bundle
+layout) extract the first matching entry to a temp file. Rendering
+uses `CoreIcon::generator::AppIcon::from_file` (original colors) plus
+a Lanczos3 downscale to 192px. Returns `None` when no icon is found
+or rendering fails (caller shows the default folder artwork).
 
 ### `item_count`
 

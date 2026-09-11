@@ -15,6 +15,9 @@ pub struct DirEntry {
   pub name: String,
   /// True for directories, false for files.
   pub is_dir: bool,
+  /// True for `.app` bundles (directory or file): the grid shows the
+  /// app icon rendered once through CoreIcon.
+  pub is_app: bool,
   /// Lowercase extension without dot (`jpg`, `mp4`, `mp3`), empty for
   /// directories and extensionless files.
   pub ext: String,
@@ -60,18 +63,21 @@ pub fn downloads_dir() -> PathBuf {
   PathBuf::from(home).join("Downloads")
 }
 
-/// Display name: directories keep their name, files lose the extension
-/// (`archive.tar.gz` shows as `archive.tar`).
+/// Display name: directories keep their name, `.app` bundles lose the
+/// suffix, files lose the extension (`archive.tar.gz` shows as
+/// `archive.tar`).
 pub fn display_name(name: &str, is_dir: bool) -> String {
   if is_dir {
-    name.to_string()
-  } else {
-    Path::new(name)
-      .file_stem()
-      .and_then(|stem| stem.to_str())
-      .unwrap_or(name)
-      .to_string()
+    if let Some(stripped) = name.strip_suffix(".app").or_else(|| name.strip_suffix(".APP")) {
+      return stripped.to_string();
+    }
+    return name.to_string();
   }
+  Path::new(name)
+    .file_stem()
+    .and_then(|stem| stem.to_str())
+    .unwrap_or(name)
+    .to_string()
 }
 
 /// List a directory, directories first then files, each alphabetical
@@ -91,6 +97,7 @@ pub fn list_dir(path: &Path) -> Vec<DirEntry> {
     .filter(|(_, name)| !name.to_lowercase().ends_with(".zone.identifier"))
     .map(|(entry, name)| {
       let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+      let is_app = name.to_lowercase().ends_with(".app");
       let ext = if is_dir {
         String::new()
       } else {
@@ -100,7 +107,7 @@ pub fn list_dir(path: &Path) -> Vec<DirEntry> {
           .unwrap_or("")
           .to_lowercase()
       };
-      DirEntry { name, is_dir, ext }
+      DirEntry { name, is_dir, is_app, ext }
     })
     .collect();
   entries.sort_by(|a, b| {
@@ -137,6 +144,12 @@ mod tests {
   #[test]
   fn dir_display_name_keeps_name() {
     assert_eq!(display_name("Projects.d", true), "Projects.d");
+  }
+
+  #[test]
+  fn app_display_name_strips_suffix() {
+    assert_eq!(display_name("Demo.app", true), "Demo");
+    assert_eq!(display_name("Demo.app", false), "Demo");
   }
 
   #[test]

@@ -132,11 +132,18 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
 
+  // `.app` bundles show the app icon rendered once through CoreIcon.
   // Directories show the default folder icon. Images show the picture
   // itself, videos show the cached first-second frame (themed icon
   // while ffmpeg is missing), audio files show the music icon. Other
   // files show no icon, only the name without extension.
-  if entry.is_dir {
+  if entry.is_app {
+    let full = base.join(&entry.name);
+    match icons::app_icon(&full) {
+      Some(icon) => cell.append(&preview_image(&icon)),
+      None => cell.append(&folder_art()),
+    }
+  } else if entry.is_dir {
     cell.append(&folder_icon_art());
   } else {
     let full = base.join(&entry.name);

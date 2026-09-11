@@ -45,6 +45,97 @@ pub fn folder_icon(file: &str) -> Option<PathBuf> {
   icon_path("scalable", file)
 }
 
+/// Icon files inside a `.app` bundle, in lookup order (TBuild bundle
+/// layout: the `tontoo.proj` icon lands in both `App/` and
+/// `Resources/`).
+const APP_ICON_CANDIDATES: &[&str] = &[
+  "Resources/icon.png",
+  "App/icon.png",
+  "Resources/app_icon.png",
+];
+
+/// Raw icon file of a `.app` bundle directory: the first existing
+/// candidate, else the `icon` field of `tontoo.proj` (relative to the
+/// bundle dir).
+fn bundle_icon_file(bundle: &Path) -> Option<PathBuf> {
+  for candidate in APP_ICON_CANDIDATES {
+    let path = bundle.join(candidate);
+    if path.is_file() {
+      return Some(path);
+    }
+  }
+  let proj = std::fs::read_to_string(bundle.join("tontoo.proj")).ok()?;
+  let value: serde_json::Value = serde_json::from_str(&proj).ok()?;
+  let icon = value.get("icon")?.as_str()?;
+  let path = bundle.join(icon);
+  path.is_file().then_some(path)
+}
+
+/// Raw icon file of a `.app` ZIP archive: the first candidate entry,
+/// extracted to a temp file keyed by the archive size plus mtime.
+fn archive_icon_file(archive: &Path) -> Option<PathBuf> {
+  let meta = std::fs::metadata(archive).ok()?;
+  let mtime = meta
+    .modified()
+    .ok()?
+    .duration_since(std::time::UNIX_EPOCH)
+    .ok()?
+    .as_secs();
+  let stem = archive
+    .file_stem()?
+    .to_str()?
+    .replace(['.', ' ', '-'], "_");
+  let raw = std::env::temp_dir().join(format!("finder-approw_{}_{}_{mtime}.png", stem, meta.len()));
+  if raw.is_file() {
+    return Some(raw);
+  }
+  let file = std::fs::File::open(archive).ok()?;
+  let mut zip = zip::ZipArchive::new(file).ok()?;
+  for candidate in APP_ICON_CANDIDATES {
+    if let Ok(mut entry) = zip.by_name(candidate) {
+      let mut out = std::fs::File::create(&raw).ok()?;
+      std::io::copy(&mut entry, &mut out).ok()?;
+      return Some(raw);
+    }
+  }
+  None
+}
+
+/// App icon for a `.app` entry (bundle directory or ZIP archive),
+/// rendered once through CoreIcon (`AppIcon`, original colors) and
+/// cached in the temp dir keyed by size plus mtime. The returned file
+/// is 3x the 64px grid size. Returns `None` when no icon is found or
+/// rendering fails (caller shows the default folder artwork).
+pub fn app_icon(entry: &Path) -> Option<PathBuf> {
+  let meta = std::fs::metadata(entry).ok()?;
+  let mtime = meta
+    .modified()
+    .ok()?
+    .duration_since(std::time::UNIX_EPOCH)
+    .ok()?
+    .as_secs();
+  let stem = entry
+    .file_stem()?
+    .to_str()?
+    .replace(['.', ' ', '-'], "_");
+  let cached = std::env::temp_dir().join(format!("finder-appicon_{}_{}_{mtime}.png", stem, meta.len()));
+  if cached.is_file() {
+    return Some(cached);
+  }
+  let raw = if entry.is_dir() {
+    bundle_icon_file(entry)
+  } else {
+    archive_icon_file(entry)
+  }?;
+  crate::CoreIcon::generator::AppIcon::from_file(&raw).save(&cached).ok()?;
+  // Downscale the 1024px master once (Lanczos3 stays sharp on 1x and
+  // covers HiDPI 2-3x at the 64px grid size).
+  let master = image::open(&cached).ok()?;
+  let small = image::imageops::resize(&master, 192, 192, image::imageops::FilterType::Lanczos3);
+  small.save(&cached).ok()?;
+  Some(cached)
+}
+
 /// Themed icon for audio files (`scalable/blue-folder-music.svg`).
 pub fn audio_icon() -> Option<PathBuf> {
   folder_icon("blue-folder-music.svg")
@@ -135,9 +226,8 @@ mod tests {
     assert!(icon_path("scalable", "does-not-exist-finder.svg").is_none());
   }
 
-    #[test]
+  #[test]
   fn known_grid_icons_exist() {
-
     // Runs from the crate root in dev checkouts, so the default grid
     // icon must resolve. Skipped silently when run from another layout.
     if std::env::current_dir()
@@ -176,6 +266,69 @@ mod tests {
     let file = base.join("clip.mp4");
     std::fs::write(&file, b"x").unwrap();
     assert!(video_thumb(&file).is_none());
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  fn write_test_png(path: &Path) {
+    let img = image::RgbImage::new(16, 16);
+    image::DynamicImage::ImageRgb8(img).save(path).unwrap();
+  }
+
+  #[test]
+  fn app_icon_from_bundle_dir_renders_once() {
+    let base = std::env::temp_dir().join(format!("finder-test-appdir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let resources = base.join("Demo.app/Resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    write_test_png(&resources.join("icon.png"));
+
+    let first = app_icon(&base.join("Demo.app"));
+    let second = app_icon(&base.join("Demo.app"));
+    assert!(first.is_some());
+    assert_eq!(first, second);
+    let rendered = first.unwrap();
+    assert!(rendered.is_file());
+    let img = image::open(&rendered).unwrap();
+    assert_eq!((img.width(), img.height()), (192, 192));
+
+    let _ = std::fs::remove_dir_all(&base);
+    let _ = std::fs::remove_file(&rendered);
+  }
+
+  #[test]
+  fn app_icon_from_bundle_zip_renders_once() {
+    let base = std::env::temp_dir().join(format!("finder-test-appzip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let raw = base.join("raw-icon.png");
+    write_test_png(&raw);
+
+    let archive = base.join("Demo.app");
+    {
+      let file = std::fs::File::create(&archive).unwrap();
+      let mut zip = zip::ZipWriter::new(file);
+      zip
+        .start_file("Resources/icon.png", zip::write::SimpleFileOptions::default())
+        .unwrap();
+      let mut src = std::fs::File::open(&raw).unwrap();
+      std::io::copy(&mut src, &mut zip).unwrap();
+      zip.finish().unwrap();
+    }
+
+    let rendered = app_icon(&archive);
+    assert!(rendered.is_some());
+    assert!(rendered.unwrap().is_file());
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn app_icon_without_icon_returns_none() {
+    let base = std::env::temp_dir().join(format!("finder-test-appno-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let bundle = base.join("Empty.app");
+    std::fs::create_dir_all(&bundle).unwrap();
+    assert!(app_icon(&bundle).is_none());
     let _ = std::fs::remove_dir_all(&base);
   }
 }
