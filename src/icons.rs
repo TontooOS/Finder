@@ -45,6 +45,26 @@ pub fn folder_icon(file: &str) -> Option<PathBuf> {
   icon_path("scalable", file)
 }
 
+/// Resolve `Resources/<parts...>` to an existing path across dev
+/// checkouts, `.app` bundles and installed files.
+pub fn resources_file(parts: &[&str]) -> Option<PathBuf> {
+  for dir in resources_dirs() {
+    let mut path = dir.clone();
+    for part in parts {
+      path = path.join(part);
+    }
+    if path.is_file() {
+      return Some(path);
+    }
+  }
+  None
+}
+
+/// Themed icon for archive files (`Resources/extensionicons/zip.png`).
+pub fn archive_icon() -> Option<PathBuf> {
+  resources_file(&["extensionicons", "zip.png"])
+}
+
 /// Icon files inside a `.app` bundle, in lookup order (TBuild bundle
 /// layout: the `tontoo.proj` icon lands in both `App/` and
 /// `Resources/`).
@@ -238,6 +258,7 @@ mod tests {
       assert!(folder_icon("folder.svg").is_some());
       assert!(audio_icon().is_some());
       assert!(video_icon().is_some());
+      assert!(archive_icon().is_some());
     }
   }
 

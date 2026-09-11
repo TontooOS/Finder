@@ -74,7 +74,9 @@ default `folder.svg` icon from `Resources/foldericons/scalable/`
 by kind: images show the picture itself, videos show the cached
 first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
 size plus mtime) with the themed `blue-folder-videos.svg` fallback
-while `ffmpeg` is missing, audio files show `blue-folder-music.svg`.
+while `ffmpeg` is missing, audio files show `blue-folder-music.svg`,
+archives (zip, rar, 7z, tar, gz, gzip, bz2) show
+`Resources/extensionicons/zip.png`.
 Other files show no icon, only the name with the extension stripped.
 Entries sort directories-first, then alphabetically
 (case-insensitive). An empty or unreadable directory shows a

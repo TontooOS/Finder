@@ -29,6 +29,7 @@ pub enum FileKind {
   Image,
   Video,
   Audio,
+  Archive,
   Other,
 }
 
@@ -44,6 +45,10 @@ const AUDIO_EXTS: &[&str] = &[
   "mp3", "wav", "flac", "ogg", "oga", "m4a", "opus", "aac", "wma",
 ];
 
+const ARCHIVE_EXTS: &[&str] = &[
+  "zip", "rar", "7z", "tar", "gz", "gzip", "bz2",
+];
+
 /// Classify a lowercase extension.
 pub fn file_kind(ext: &str) -> FileKind {
   if IMAGE_EXTS.contains(&ext) {
@@ -52,6 +57,8 @@ pub fn file_kind(ext: &str) -> FileKind {
     FileKind::Video
   } else if AUDIO_EXTS.contains(&ext) {
     FileKind::Audio
+  } else if ARCHIVE_EXTS.contains(&ext) {
+    FileKind::Archive
   } else {
     FileKind::Other
   }
@@ -185,6 +192,13 @@ mod tests {
     assert_eq!(file_kind("mkv"), FileKind::Video);
     assert_eq!(file_kind("mp3"), FileKind::Audio);
     assert_eq!(file_kind("flac"), FileKind::Audio);
+    assert_eq!(file_kind("zip"), FileKind::Archive);
+    assert_eq!(file_kind("rar"), FileKind::Archive);
+    assert_eq!(file_kind("7z"), FileKind::Archive);
+    assert_eq!(file_kind("tar"), FileKind::Archive);
+    assert_eq!(file_kind("gz"), FileKind::Archive);
+    assert_eq!(file_kind("gzip"), FileKind::Archive);
+    assert_eq!(file_kind("bz2"), FileKind::Archive);
     assert_eq!(file_kind("pdf"), FileKind::Other);
     assert_eq!(file_kind(""), FileKind::Other);
   }

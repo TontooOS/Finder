@@ -160,6 +160,10 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
         Some(icon) => cell.append(&preview_image(&icon)),
         None => cell.append(&folder_art()),
       },
+      model::FileKind::Archive => match icons::archive_icon() {
+        Some(icon) => cell.append(&preview_image(&icon)),
+        None => cell.append(&folder_art()),
+      },
       model::FileKind::Other => {}
     }
   }
