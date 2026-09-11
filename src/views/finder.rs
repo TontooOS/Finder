@@ -12,7 +12,8 @@ use crate::icons;
 use crate::lang;
 use crate::model;
 use crate::TontooUI::{
-  ContentUnavailableView, Sidebar, SidebarIcon, Toolbar, ToolbarItem,
+  ContentUnavailableView, ContextMenu, MenuEntry, MenuItem, Sidebar, SidebarIcon, Toolbar,
+  ToolbarItem,
 };
 use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
@@ -167,11 +168,22 @@ fn rounded_preview(path: &std::path::Path) -> gtk::Box {
   holder
 }
 
+/// Right-click on a file cell claims the press so it never reaches
+/// the empty-space `ContextMenu` wrapper: file right-clicks show
+/// nothing (for now).
+fn suppress_file_menu(cell: &gtk::Box) {
+  let claim = gtk::GestureClick::new();
+  claim.set_button(3);
+  claim.connect_pressed(|_, _, _, _| {});
+  cell.add_controller(claim);
+}
+
 fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -> gtk::Box {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
+  suppress_file_menu(&cell);
 
   // `.app` bundles show the app icon rendered once through CoreIcon.
   // Directories show the default folder icon. Images show the picture
@@ -234,6 +246,52 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   cell.append(&label);
 
   cell
+}
+
+/// Empty-space context menu entries: New Folder, divider, Get Info,
+/// divider, New File submenu with Text File. Actions log for now.
+pub(crate) fn empty_space_menu() -> Vec<MenuEntry> {
+  vec![
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.new_folder"))
+        .on_activate(|| println!("Finder new folder")),
+    ),
+    MenuEntry::Divider,
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.get_info")).on_activate(|| println!("Finder get info")),
+    ),
+    MenuEntry::Divider,
+    MenuEntry::Submenu {
+      title: lang::t("context.new_file"),
+      items: vec![MenuEntry::Item(MenuItem::new(lang::t("context.text_file")))],
+    },
+  ]
+}
+
+/// Wraps a raw GTK widget as a TontooUI `Widget` (e.g. to host the
+/// scroll area inside a `ContextMenu`).
+struct GtkWrap {
+  id: WidgetId,
+  widget: gtk::Widget,
+}
+
+impl GtkWrap {
+  fn wrap(widget: impl IsA<gtk::Widget>) -> Self {
+    Self {
+      id: next_widget_id(),
+      widget: widget.upcast(),
+    }
+  }
+}
+
+impl Widget for GtkWrap {
+  fn id(&self) -> WidgetId {
+    self.id
+  }
+
+  fn to_gtk(&self) -> gtk::Widget {
+    self.widget.clone()
+  }
 }
 
 /// Root widget: sidebar on the left, toolbar plus grid plus status on the right.
@@ -369,7 +427,15 @@ impl Widget for FinderRoot {
       &format!(".finder-scroll {{ background-color: {}; }}", pal.bg),
     );
     scroll.add_css_class("finder-scroll");
-    detail.append(&scroll);
+
+    // Right-click on empty space shows the context menu; file cells
+    // claim the press (see suppress_file_menu), so it stays hidden
+    // over files.
+    let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone())).entries(empty_space_menu());
+    let menu_gtk = menu.to_gtk();
+    menu_gtk.set_hexpand(true);
+    menu_gtk.set_vexpand(true);
+    detail.append(&menu_gtk);
 
     let status = gtk::Box::new(gtk::Orientation::Vertical, 0);
     status.set_margin_top(6);
@@ -430,4 +496,32 @@ fn refresh_grid(grid: &gtk::FlowBox, status: &gtk::Label, pal: &Palette) {
     grid.insert(&folder_cell(&base, entry, pal), -1);
   }
   status.set_markup(&status_markup(&entries, pal));
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn item_label(entry: &MenuEntry) -> Option<&str> {
+    match entry {
+      MenuEntry::Item(item) => Some(item.label.as_str()),
+      _ => None,
+    }
+  }
+
+  #[test]
+  fn empty_space_menu_structure() {
+    let entries = empty_space_menu();
+    assert_eq!(entries.len(), 5);
+    assert!(matches!(entries[1], MenuEntry::Divider));
+    assert!(matches!(entries[3], MenuEntry::Divider));
+    match &entries[4] {
+      MenuEntry::Submenu { title, items } => {
+        assert_eq!(title, &lang::t("context.new_file"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(item_label(&items[0]), Some(lang::t("context.text_file").as_str()));
+      }
+      _ => panic!("last entry must be the New File submenu"),
+    }
+  }
 }

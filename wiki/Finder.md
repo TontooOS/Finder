@@ -209,6 +209,23 @@ file system event. The UI drains the channel on a 400ms main-thread
 tick and rebuilds the grid once per burst, so the Finder view stays
 in sync with the folder. Returns `None` when watching fails.
 
+## Empty-space context menu
+
+Right-clicking empty grid space shows a TontooUI `ContextMenu`
+(`empty_space_menu()` in `src/views/finder.rs`):
+
+| Order | Entry |
+|---|---|
+| 1 | `context.new_folder` (New Folder, logs for now) |
+| 2 | Divider |
+| 3 | `context.get_info` (Get Info, logs for now) |
+| 4 | Divider |
+| 5 | `context.new_file` submenu (New File) with `context.text_file` (Text File, no action yet) |
+
+Right-clicking a file cell claims the press (`suppress_file_menu`),
+so the menu stays hidden over files. All actions log for now;
+creating folders/files and the info panel are later steps.
+
 ### `app_icon`
 
 ```rust
@@ -295,6 +312,10 @@ localized `name` in `Info.tontoo`). Keep both locations in sync.
 | `detail.search` | `Search` | `Suchen` |
 | `detail.empty` | `Downloads is empty` | `Downloads ist leer` |
 | `detail.empty.hint` | `Files you download appear here.` | `Heruntergeladene Dateien erscheinen hier.` |
+| `context.new_folder` | `New Folder` | `Neuer Ordner` |
+| `context.get_info` | `Get Info` | `Informationen` |
+| `context.new_file` | `New File` | `Neue Datei` |
+| `context.text_file` | `Text File` | `Textdatei` |
 
 ### `t(key)`
 
