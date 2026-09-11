@@ -76,7 +76,9 @@ first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
 size plus mtime) with the themed `blue-folder-videos.svg` fallback
 while `ffmpeg` is missing, audio files show `blue-folder-music.svg`,
 archives (zip, rar, 7z, tar, gz, gzip, bz2) show
-`Resources/extensionicons/zip.png`.
+`Resources/extensionicons/zip.png`, and other files show their
+document icon from `Resources/extensionicons/` (`basis.png` when no
+specific icon exists).
 Other files show no icon, only the name with the extension stripped.
 Entries sort directories-first, then alphabetically
 (case-insensitive). An empty or unreadable directory shows a
@@ -124,8 +126,26 @@ an empty list when unreadable.
 pub fn file_kind(ext: &str) -> FileKind
 ```
 
-Classifies a lowercase extension as `Image`, `Video`, `Audio` or
-`Other`, driving the grid preview.
+Classifies a lowercase extension as `Image`, `Video`, `Audio`,
+`Archive` or `Other`, driving the grid preview.
+
+### `document_icon`
+
+```rust
+pub fn document_icon(ext: &str) -> Option<&'static str>
+```
+
+Document icon file in `Resources/extensionicons/` for an extension.
+Families share one icon: spreadsheets (`xls`, `xlsx`, `xlsm`,
+`xlsb`, `csv`, `tsv`, `ods`) use `xls.png`, scripts (`js`, `jsx`,
+`mjs`, `cjs`, `ts`, `tsx`, `json`, `jsonc`) use `javascript.png`,
+slides (`ppt`, `pptx`, `pps`, `ppsx`, `odp`) use `ppt.png`, Word
+(`docx`, `docm`, `dotx`) uses `docx.png`, text-like (`txt`, `text`,
+`log`, `ini`, `cfg`, `conf`, `toml`, `yaml`, `yml`, `xml`) uses
+`txt.png`, shells (`sh`, `bash`, `zsh`, `fish`, `bat`, `cmd`, `ps1`)
+use `sh.png`, plus `css`, `doc`, `html`, `java`, `md`, `pdf`, `py`,
+`rs` icons. Returns `None` when no specific icon exists (caller uses
+`basis.png`).
 
 ### `list_downloads`
 

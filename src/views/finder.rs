@@ -164,7 +164,14 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
         Some(icon) => cell.append(&preview_image(&icon)),
         None => cell.append(&folder_art()),
       },
-      model::FileKind::Other => {}
+      model::FileKind::Other => {
+        let icon = model::document_icon(&entry.ext)
+          .and_then(icons::extension_icon)
+          .or_else(icons::generic_file_icon);
+        if let Some(path) = icon {
+          cell.append(&preview_image(&path));
+        }
+      }
     }
   }
 

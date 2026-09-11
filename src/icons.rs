@@ -65,6 +65,17 @@ pub fn archive_icon() -> Option<PathBuf> {
   resources_file(&["extensionicons", "zip.png"])
 }
 
+/// Document icon from `Resources/extensionicons/`.
+pub fn extension_icon(file: &str) -> Option<PathBuf> {
+  resources_file(&["extensionicons", file])
+}
+
+/// Generic file icon (`Resources/extensionicons/basis.png`) for files
+/// without a specific document icon.
+pub fn generic_file_icon() -> Option<PathBuf> {
+  extension_icon("basis.png")
+}
+
 /// Icon files inside a `.app` bundle, in lookup order (TBuild bundle
 /// layout: the `tontoo.proj` icon lands in both `App/` and
 /// `Resources/`).
@@ -259,6 +270,26 @@ mod tests {
       assert!(audio_icon().is_some());
       assert!(video_icon().is_some());
       assert!(archive_icon().is_some());
+      for file in [
+        "basis.png",
+        "css.png",
+        "doc.png",
+        "docx.png",
+        "html.png",
+        "java.png",
+        "javascript.png",
+        "md.png",
+        "pdf.png",
+        "ppt.png",
+        "python.png",
+        "rust.png",
+        "sh.png",
+        "txt.png",
+        "xls.png",
+        "zip.png",
+      ] {
+        assert!(extension_icon(file).is_some(), "missing extension icon: {file}");
+      }
     }
   }
 

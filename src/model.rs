@@ -64,6 +64,30 @@ pub fn file_kind(ext: &str) -> FileKind {
   }
 }
 
+/// Document icon file in `Resources/extensionicons/` for an extension,
+/// or `None` when no specific icon exists (caller uses `basis.png`).
+pub fn document_icon(ext: &str) -> Option<&'static str> {
+  Some(match ext {
+    "css" | "scss" | "sass" | "less" => "css.png",
+    "doc" | "dot" | "odt" | "rtf" => "doc.png",
+    "docx" | "docm" | "dotx" => "docx.png",
+    "html" | "htm" | "xhtml" | "mhtml" => "html.png",
+    "java" | "class" | "jar" => "java.png",
+    "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "json" | "jsonc" => "javascript.png",
+    "md" | "markdown" | "mdown" | "mkd" => "md.png",
+    "pdf" => "pdf.png",
+    "ppt" | "pptx" | "pps" | "ppsx" | "odp" => "ppt.png",
+    "py" | "pyw" | "pyc" => "python.png",
+    "rs" => "rust.png",
+    "sh" | "bash" | "zsh" | "fish" | "bat" | "cmd" | "ps1" => "sh.png",
+    "txt" | "text" | "log" | "ini" | "cfg" | "conf" | "toml" | "yaml" | "yml" | "xml" => {
+      "txt.png"
+    }
+    "xls" | "xlsx" | "xlsm" | "xlsb" | "csv" | "tsv" | "ods" => "xls.png",
+    _ => return None,
+  })
+}
+
 /// The listed directory: `~/Downloads/`.
 pub fn downloads_dir() -> PathBuf {
   let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -201,6 +225,26 @@ mod tests {
     assert_eq!(file_kind("bz2"), FileKind::Archive);
     assert_eq!(file_kind("pdf"), FileKind::Other);
     assert_eq!(file_kind(""), FileKind::Other);
+  }
+
+  #[test]
+  fn document_icon_maps_families() {
+    assert_eq!(document_icon("xlsx"), Some("xls.png"));
+    assert_eq!(document_icon("csv"), Some("xls.png"));
+    assert_eq!(document_icon("ts"), Some("javascript.png"));
+    assert_eq!(document_icon("json"), Some("javascript.png"));
+    assert_eq!(document_icon("rs"), Some("rust.png"));
+    assert_eq!(document_icon("py"), Some("python.png"));
+    assert_eq!(document_icon("md"), Some("md.png"));
+    assert_eq!(document_icon("pdf"), Some("pdf.png"));
+    assert_eq!(document_icon("docx"), Some("docx.png"));
+    assert_eq!(document_icon("pptx"), Some("ppt.png"));
+    assert_eq!(document_icon("sh"), Some("sh.png"));
+    assert_eq!(document_icon("txt"), Some("txt.png"));
+    assert_eq!(document_icon("html"), Some("html.png"));
+    assert_eq!(document_icon("css"), Some("css.png"));
+    assert_eq!(document_icon("java"), Some("java.png"));
+    assert_eq!(document_icon("exe"), None);
   }
 
   #[test]
