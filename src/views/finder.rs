@@ -270,10 +270,8 @@ impl Widget for FinderRoot {
     toolbar_row.append(&title);
 
     let views = Toolbar::new()
-      .item(ToolbarItem::new("square.grid.2x2").on_click(|| println!("Finder view icons")))
-      .item(ToolbarItem::new("list.bullet").on_click(|| println!("Finder view list")))
-      .item(ToolbarItem::new("rectangle.split.3x1").on_click(|| println!("Finder view columns")))
-      .item(ToolbarItem::new("rectangle.stack").on_click(|| println!("Finder view gallery")));
+      .item(ToolbarItem::new("square.grid.2x2"))
+      .item(ToolbarItem::new("list.bullet"));
     toolbar_row.append(&views.to_gtk());
 
     let actions = Toolbar::new()
