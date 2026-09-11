@@ -189,7 +189,9 @@ App icon for a `.app` entry, rendered once through CoreIcon and
 cached. Bundle directories resolve the raw icon from
 `Resources/icon.png`, `App/icon.png`, `Resources/app_icon.png`, else
 the `icon` field of `tontoo.proj`. `.app` ZIP archives (TBuild bundle
-layout) extract the first matching entry to a temp file. Rendering
+layout) extract the first matching entry to a temp file; entries may
+sit behind a top-level `<Name>.app/` prefix, so candidates match by
+path suffix. Rendering
 uses `CoreIcon::generator::AppIcon::from_file` (original colors) plus
 a Lanczos3 downscale to 192px. Returns `None` when no icon is found
 or rendering fails (caller shows the default folder artwork).
