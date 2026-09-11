@@ -69,9 +69,10 @@ or ZIP archive) show the app icon rendered once through CoreIcon
 size plus mtime). Directories render the
 default `folder.svg` icon from `Resources/foldericons/scalable/`
 (full-color SVG rendered by GTK through librsvg, 64px). Files render
-by kind: images show the picture itself (rounded corners baked into the alpha channel at 128px
-backing for the 64px display size, since GTK CSS `border-radius`
-does not clip image content), videos show the cached
+by kind: images show the picture itself (rounded corners baked into the alpha channel at an exact
+64px backing with a 64px size request, since GTK `pixel-size` does
+not scale paintables and GTK CSS `border-radius` does not clip image
+content), videos show the cached
 first-second frame (`video_thumb`, temp dir `finder-thumbs/`, keyed by
 size plus mtime) with the themed `blue-folder-videos.svg` fallback
 while `ffmpeg` is missing, audio files (mp3, wav, flac, ogg, oga,

@@ -179,9 +179,10 @@ fn preview_image(path: &std::path::Path) -> gtk::Box {
 fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
   if round {
     if let Ok(img) = image::open(path) {
-      // 128px backing for the 64px display size (sharp on HiDPI).
-      let mut square = icons::cover_square(&img, 128);
-      icons::round_corners(&mut square, 20);
+      // Exact 64px backing: GtkImage pixel-size does not scale
+      // paintables, so a larger texture would blow up the grid.
+      let mut square = icons::cover_square(&img, 64);
+      icons::round_corners(&mut square, 10);
       let (w, h) = square.dimensions();
       let bytes = glib::Bytes::from(square.as_raw());
       let texture = gdk4::MemoryTexture::new(
@@ -193,12 +194,14 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
       );
       let preview = gtk::Image::from_paintable(Some(&texture));
       preview.set_pixel_size(64);
+      preview.set_size_request(64, 64);
       preview.set_halign(gtk::Align::Center);
       return preview.upcast();
     }
   }
   let image = gtk::Image::from_file(path);
   image.set_pixel_size(64);
+  image.set_size_request(64, 64);
   image.set_halign(gtk::Align::Center);
   image.upcast()
 }
