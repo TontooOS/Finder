@@ -8,6 +8,7 @@
 //!
 //! All text uses SF Pro Display and both `en_us` and `de_de` strings.
 
+use crate::icons;
 use crate::lang;
 use crate::model;
 use crate::TontooUI::{Sidebar, SidebarIcon, TextInput, Toolbar, ToolbarItem};
@@ -68,7 +69,7 @@ fn blue() -> Color {
 }
 
 /// Static Tahoe-style folder artwork: tab plus body in Finder blue.
-/// Pure CSS boxes, so the grid never depends on generated icon files.
+/// Pure CSS boxes, used only when the themed SVG icon file is missing.
 fn folder_art() -> gtk::Box {
   let art = gtk::Box::new(gtk::Orientation::Vertical, 0);
   art.set_halign(gtk::Align::Center);
@@ -100,14 +101,26 @@ fn folder_art() -> gtk::Box {
   art
 }
 
-fn folder_cell(name: &str, pal: &Palette) -> gtk::Box {
+fn folder_cell(folder: &model::Folder, pal: &Palette) -> gtk::Box {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
-  cell.append(&folder_art());
 
-  let label = gtk::Label::new(Some(name));
+  // Themed icon from Resources/foldericons/scalable/ (GTK renders the
+  // SVG through librsvg). Falls back to CSS artwork when the file is
+  // missing so the grid never renders an empty cell.
+  match icons::folder_icon(folder.icon) {
+    Some(path) => {
+      let image = gtk::Image::from_file(&path);
+      image.set_pixel_size(64);
+      image.set_halign(gtk::Align::Center);
+      cell.append(&image);
+    }
+    None => cell.append(&folder_art()),
+  }
+
+  let label = gtk::Label::new(Some(folder.name));
   label.set_halign(gtk::Align::Center);
   label.set_justify(gtk::Justification::Center);
   label.set_wrap(true);
@@ -303,8 +316,8 @@ impl Widget for FinderRoot {
       &format!(".finder-grid {{ background-color: {}; }}", pal.bg),
     );
     grid.add_css_class("finder-grid");
-    for name in model::folders() {
-      grid.insert(&folder_cell(name, &pal), -1);
+    for folder in model::folders() {
+      grid.insert(&folder_cell(&folder, &pal), -1);
     }
 
     let scroll = gtk::ScrolledWindow::new();

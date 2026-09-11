@@ -5,6 +5,7 @@
 //! the middle, status line at the bottom. Follows the live system color
 //! scheme (Dark `#1d1d1d`, Light `#ececec`).
 
+mod icons;
 mod lang;
 mod model;
 mod views;

@@ -73,19 +73,56 @@ filtering are later steps.
 ## Folder grid
 
 A `gtk::FlowBox` (4-8 columns, homogeneous) shows the 17 static folders
-from `src/model.rs::folders()`. Each cell is a vertical box with Tahoe
-folder artwork (pure CSS: `.fd-tab` plus `.fd-body` in Finder blue
-`#7fbeec` with edge `#5ea3d8`) and a two-line centered `SF Pro Display`
-label (`.fd-label`, 12px).
+from `src/model.rs::folders()`. Each cell is a vertical box with the
+themed folder icon from `Resources/foldericons/scalable/` (full-color
+SVG rendered by GTK through librsvg, 64px) and a two-line centered
+`SF Pro Display` label (`.fd-label`, 12px). When an icon file is
+missing the cell falls back to Tahoe CSS artwork (`.fd-tab` plus
+`.fd-body` in Finder blue `#7fbeec` with edge `#5ea3d8`), so the grid
+never renders an empty cell.
+
+`src/icons.rs` resolves `Resources/foldericons/<size>/<file>` across
+dev checkouts (`Resources/`), `.app` bundles and installed files
+(`/usr/share/finder/`). The sidebar keeps CoreIcon SF Symbols:
+`SidebarIcon::file` relies on the `image` crate, which cannot decode
+SVG.
+
+| Folder | Icon |
+|---|---|
+| Applications | `blue-folder.svg` |
+| Applications (Parallels), Parallels | `folder-vbox.svg` |
+| Books | `folder-book.svg` |
+| Business | `folder-chart.svg` |
+| Desktop | `blue-user-desktop.svg` |
+| Documents | `blue-folder-documents.svg` |
+| Downloads | `blue-folder-download.svg` |
+| Movies | `blue-folder-videos.svg` |
+| Music | `blue-folder-music.svg` |
+| News | `folder-notes.svg` |
+| Pictures | `blue-folder-images.svg` |
+| Projects | `folder-projects.svg` |
+| Public | `blue-folder-public.svg` |
+| Scripts | `folder-script.svg` |
+| Simulations | `folder-calculate.svg` |
+| Software | `folder-appimage.svg` |
 
 ### `folders`
 
 ```rust
-pub fn folders() -> Vec<&'static str>
+pub fn folders() -> Vec<Folder>
 ```
 
-Returns the static folder names shown in the grid. Folder names are
-proper nouns and stay untranslated.
+Returns the static folders shown in the grid. `Folder` holds `name`
+(proper noun, untranslated) and `icon` (SVG file in `scalable/`).
+
+### `folder_icon`
+
+```rust
+pub fn folder_icon(file: &str) -> Option<PathBuf>
+```
+
+Resolves a `scalable/` icon file. Returns `None` when no layout holds
+the file.
 
 ### `item_count`
 
