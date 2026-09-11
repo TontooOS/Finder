@@ -1,18 +1,17 @@
 # Finder
 
 TontooOS file manager basis: a 1080x720 TontooUI window with a
-Tahoe-style sidebar on the left (Favourites, Locations, Tags), a toolbar
-row with navigation plus view and action controls plus search, a folder
-icon grid in the middle and a status line at the bottom. The grid shows
-static folders from `src/model.rs`; real filesystem listing and sidebar
-selection wiring are later steps.
+Tahoe-style sidebar on the left (currently Favourites with Downloads),
+a toolbar row with navigation plus view and action controls plus search,
+a live `~/Downloads/` grid in the middle and a status line at the
+bottom. Locations and Tags sidebar sections are later steps.
 
 ## Layout
 
 From left to right the window contains:
 
-1. Sidebar (`Sidebar`, 240px, traffic lights, search, sections)
-2. Detail column: toolbar row, folder grid (`FlowBox`), status line
+1. Sidebar (`Sidebar`, 240px, traffic lights, search, one section)
+2. Detail column: toolbar row, Downloads grid (`FlowBox`), status line
 
 ```rust
 let mut app = App::with_delegate(lang::t("app.title"), 1080, 720, FinderDelegate);
@@ -24,24 +23,18 @@ app.run();
 
 ## Sidebar
 
-`TontooUI::Sidebar` with the `coreicon` feature (default). Three
-sections mirror the macOS Finder: Favourites, Locations and Tags. Tag
-rows use the SF Symbol `circle.fill` in the tag color.
+`TontooUI::Sidebar` with the `coreicon` feature (default). Currently a
+single Favourites section with the Downloads row; Locations and Tags
+sections are later steps.
 
 | Section | Rows |
 |---|---|
-| `sidebar.favourites` | Recents (`clock.fill`), Applications (`square.stack.3d.up.fill`, blue), Downloads (`arrow.down.circle.fill`, blue), Documents (`doc.fill`), Desktop (`desktopcomputer`) |
-| `sidebar.locations` | OSX (`internaldrive.fill`), Network (`network`) |
-| `sidebar.tags` | Professional (blue), Urgent (red), Active (orange), Reference (yellow), Personal (green), Creative (purple), Archive (gray), all `circle.fill` |
+| `sidebar.favourites` | Downloads (`arrow.down.circle.fill`, blue) |
 
 ```rust
 let sidebar = Sidebar::new()
   .section(lang::t("sidebar.favourites"))
-  .item(lang::t("sidebar.recents"), SidebarIcon::sf("clock.fill", gray()))
-  .section(lang::t("sidebar.locations"))
-  .item(lang::t("sidebar.osx"), SidebarIcon::sf("internaldrive.fill", gray()))
-  .section(lang::t("sidebar.tags"))
-  .item(lang::t("tags.personal"), SidebarIcon::sf("circle.fill", green()))
+  .item(lang::t("sidebar.downloads"), SidebarIcon::sf("arrow.down.circle.fill", blue()))
   .selected(0)
   .search_placeholder(lang::t("sidebar.search"))
   .width(240.0)
@@ -52,8 +45,6 @@ Rules:
 
 - Selection currently only logs the index; swapping the detail content
   per row is a later step.
-- Grey icons use `Color::from_rgb(142, 142, 147)`, blue icons use
-  `Color::from_rgb(0, 122, 255)`.
 
 ## Toolbar row
 
@@ -70,16 +61,20 @@ field in a `gtk::Box` row:
 All buttons currently log their action; view switching and search
 filtering are later steps.
 
-## Folder grid
+## Downloads grid
 
-A `gtk::FlowBox` (4-8 columns, homogeneous) shows the 17 static folders
-from `src/model.rs::folders()`. Each cell is a vertical box with the
-themed folder icon from `Resources/foldericons/scalable/` (full-color
-SVG rendered by GTK through librsvg, 64px) and a two-line centered
-`SF Pro Display` label (`.fd-label`, 12px). When an icon file is
-missing the cell falls back to Tahoe CSS artwork (`.fd-tab` plus
-`.fd-body` in Finder blue `#7fbeec` with edge `#5ea3d8`), so the grid
-never renders an empty cell.
+A `gtk::FlowBox` (4-8 columns, homogeneous) shows the live entries of
+`~/Downloads/` from `src/model.rs::list_downloads()`. Directories
+render the default `folder.svg` icon from
+`Resources/foldericons/scalable/` (full-color SVG rendered by GTK
+through librsvg, 64px); files render as a plain text label with the
+extension stripped and no icon. Entries sort directories-first, then
+alphabetically (case-insensitive). An empty or unreadable directory
+shows a `ContentUnavailableView` (`detail.empty`,
+`detail.empty.hint`). When an icon file is missing the cell falls back
+to Tahoe CSS artwork (`.fd-tab` plus `.fd-body` in Finder blue
+`#7fbeec` with edge `#5ea3d8`), so the grid never renders an empty
+cell.
 
 `src/icons.rs` resolves `Resources/foldericons/<size>/<file>` across
 dev checkouts (`Resources/`), `.app` bundles and installed files
@@ -87,33 +82,40 @@ dev checkouts (`Resources/`), `.app` bundles and installed files
 `SidebarIcon::file` relies on the `image` crate, which cannot decode
 SVG.
 
-| Folder | Icon |
-|---|---|
-| Applications | `blue-folder.svg` |
-| Applications (Parallels), Parallels | `folder-vbox.svg` |
-| Books | `folder-book.svg` |
-| Business | `folder-chart.svg` |
-| Desktop | `blue-user-desktop.svg` |
-| Documents | `blue-folder-documents.svg` |
-| Downloads | `blue-folder-download.svg` |
-| Movies | `blue-folder-videos.svg` |
-| Music | `blue-folder-music.svg` |
-| News | `folder-notes.svg` |
-| Pictures | `blue-folder-images.svg` |
-| Projects | `folder-projects.svg` |
-| Public | `blue-folder-public.svg` |
-| Scripts | `folder-script.svg` |
-| Simulations | `folder-calculate.svg` |
-| Software | `folder-appimage.svg` |
-
-### `folders`
+### `downloads_dir`
 
 ```rust
-pub fn folders() -> Vec<Folder>
+pub fn downloads_dir() -> PathBuf
 ```
 
-Returns the static folders shown in the grid. `Folder` holds `name`
-(proper noun, untranslated) and `icon` (SVG file in `scalable/`).
+Returns `~/Downloads/` (`HOME` env, `/tmp` fallback).
+
+### `display_name`
+
+```rust
+pub fn display_name(name: &str, is_dir: bool) -> String
+```
+
+Directories keep their name; files lose the extension
+(`archive.tar.gz` shows as `archive.tar`).
+
+### `list_dir`
+
+```rust
+pub fn list_dir(path: &Path) -> Vec<DirEntry>
+```
+
+Lists a directory, directories first then files, each alphabetical
+(case-insensitive). Returns an empty list when unreadable.
+
+### `list_downloads`
+
+```rust
+pub fn list_downloads() -> Vec<DirEntry>
+```
+
+Live entries of `~/Downloads/`. `DirEntry` holds `name` (on disk)
+and `is_dir`.
 
 ### `folder_icon`
 
@@ -191,7 +193,8 @@ localized `name` in `Info.tontoo`). Keep both locations in sync.
 | `tags.creative` | `Creative` | `Kreativ` |
 | `tags.archive` | `Archive` | `Archiv` |
 | `detail.search` | `Search` | `Suchen` |
-| `detail.title` | `Home` | `Home` |
+| `detail.empty` | `Downloads is empty` | `Downloads ist leer` |
+| `detail.empty.hint` | `Files you download appear here.` | `Heruntergeladene Dateien erscheinen hier.` |
 
 ### `t(key)`
 

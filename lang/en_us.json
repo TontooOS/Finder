@@ -20,7 +20,8 @@
   "tags.creative": "Creative",
   "tags.archive": "Archive",
   "detail.search": "Search",
-  "detail.title": "Home",
+  "detail.empty": "Downloads is empty",
+  "detail.empty.hint": "Files you download appear here.",
   "status.line": "{count} items, {free} available",
   "status.free": "1.06 TB"
 }

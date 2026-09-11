@@ -11,7 +11,9 @@
 use crate::icons;
 use crate::lang;
 use crate::model;
-use crate::TontooUI::{Sidebar, SidebarIcon, TextInput, Toolbar, ToolbarItem};
+use crate::TontooUI::{
+  ContentUnavailableView, Sidebar, SidebarIcon, TextInput, Toolbar, ToolbarItem,
+};
 use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
 use gtk::prelude::*;
@@ -60,12 +62,25 @@ fn markup_label(text: &str, size: u32, weight: &str, color: &str) -> gtk::Label 
   label
 }
 
-fn gray() -> Color {
-  Color::from_rgb(142, 142, 147)
-}
-
 fn blue() -> Color {
   Color::from_rgb(0, 122, 255)
+}
+
+/// Default grid folder icon (`scalable/folder.svg`). Falls back to CSS
+/// artwork when the file is missing so the cell never renders empty.
+fn folder_icon_art() -> gtk::Box {
+  match icons::folder_icon("folder.svg") {
+    Some(path) => {
+      let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+      holder.set_halign(gtk::Align::Center);
+      let image = gtk::Image::from_file(&path);
+      image.set_pixel_size(64);
+      image.set_halign(gtk::Align::Center);
+      holder.append(&image);
+      holder
+    }
+    None => folder_art(),
+  }
 }
 
 /// Static Tahoe-style folder artwork: tab plus body in Finder blue.
@@ -101,26 +116,20 @@ fn folder_art() -> gtk::Box {
   art
 }
 
-fn folder_cell(folder: &model::Folder, pal: &Palette) -> gtk::Box {
+fn folder_cell(entry: &model::DirEntry, pal: &Palette) -> gtk::Box {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
 
-  // Themed icon from Resources/foldericons/scalable/ (GTK renders the
-  // SVG through librsvg). Falls back to CSS artwork when the file is
-  // missing so the grid never renders an empty cell.
-  match icons::folder_icon(folder.icon) {
-    Some(path) => {
-      let image = gtk::Image::from_file(&path);
-      image.set_pixel_size(64);
-      image.set_halign(gtk::Align::Center);
-      cell.append(&image);
-    }
-    None => cell.append(&folder_art()),
+  // Directories show the default folder icon; files show no icon, only
+  // the name without extension.
+  if entry.is_dir {
+    cell.append(&folder_icon_art());
   }
 
-  let label = gtk::Label::new(Some(folder.name));
+  let shown = model::display_name(&entry.name, entry.is_dir);
+  let label = gtk::Label::new(Some(&shown));
   label.set_halign(gtk::Align::Center);
   label.set_justify(gtk::Justification::Center);
   label.set_wrap(true);
@@ -181,62 +190,8 @@ impl Widget for FinderRoot {
     let sidebar = Sidebar::new()
       .section(lang::t("sidebar.favourites"))
       .item(
-        lang::t("sidebar.recents"),
-        SidebarIcon::sf("clock.fill", gray()),
-      )
-      .item(
-        lang::t("sidebar.applications"),
-        SidebarIcon::sf("square.stack.3d.up.fill", blue()),
-      )
-      .item(
         lang::t("sidebar.downloads"),
         SidebarIcon::sf("arrow.down.circle.fill", blue()),
-      )
-      .item(
-        lang::t("sidebar.documents"),
-        SidebarIcon::sf("doc.fill", gray()),
-      )
-      .item(
-        lang::t("sidebar.desktop"),
-        SidebarIcon::sf("desktopcomputer", gray()),
-      )
-      .section(lang::t("sidebar.locations"))
-      .item(
-        lang::t("sidebar.osx"),
-        SidebarIcon::sf("internaldrive.fill", gray()),
-      )
-      .item(
-        lang::t("sidebar.network"),
-        SidebarIcon::sf("network", gray()),
-      )
-      .section(lang::t("sidebar.tags"))
-      .item(
-        lang::t("tags.professional"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(0, 122, 255)),
-      )
-      .item(
-        lang::t("tags.urgent"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(255, 59, 48)),
-      )
-      .item(
-        lang::t("tags.active"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(255, 149, 0)),
-      )
-      .item(
-        lang::t("tags.reference"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(255, 204, 0)),
-      )
-      .item(
-        lang::t("tags.personal"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(52, 199, 89)),
-      )
-      .item(
-        lang::t("tags.creative"),
-        SidebarIcon::sf("circle.fill", Color::from_rgb(175, 82, 222)),
-      )
-      .item(
-        lang::t("tags.archive"),
-        SidebarIcon::sf("circle.fill", gray()),
       )
       .selected(0)
       .search_placeholder(lang::t("sidebar.search"))
@@ -264,7 +219,7 @@ impl Widget for FinderRoot {
       .item(ToolbarItem::new("chevron.right").on_click(|| println!("Finder forward")));
     toolbar_row.append(&nav.to_gtk());
 
-    let title = markup_label(&lang::t("detail.title"), 15, "bold", pal.fg);
+    let title = markup_label(&lang::t("sidebar.downloads"), 15, "bold", pal.fg);
     title.set_halign(gtk::Align::Start);
     title.set_valign(gtk::Align::Center);
     title.set_hexpand(true);
@@ -300,6 +255,8 @@ impl Widget for FinderRoot {
     sep.add_css_class("finder-sep");
     detail.append(&sep);
 
+    let entries = model::list_downloads();
+
     let grid = gtk::FlowBox::new();
     grid.set_selection_mode(gtk::SelectionMode::None);
     grid.set_homogeneous(true);
@@ -316,12 +273,22 @@ impl Widget for FinderRoot {
       &format!(".finder-grid {{ background-color: {}; }}", pal.bg),
     );
     grid.add_css_class("finder-grid");
-    for folder in model::folders() {
-      grid.insert(&folder_cell(&folder, &pal), -1);
+    for entry in &entries {
+      grid.insert(&folder_cell(entry, &pal), -1);
     }
 
     let scroll = gtk::ScrolledWindow::new();
-    scroll.set_child(Some(&grid));
+    if entries.is_empty() {
+      let empty = ContentUnavailableView::new()
+        .title(lang::t("detail.empty"))
+        .message(lang::t("detail.empty.hint"));
+      let empty_gtk = empty.to_gtk();
+      empty_gtk.set_hexpand(true);
+      empty_gtk.set_vexpand(true);
+      scroll.set_child(Some(&empty_gtk));
+    } else {
+      scroll.set_child(Some(&grid));
+    }
     scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
     scroll.set_hexpand(true);
@@ -337,7 +304,7 @@ impl Widget for FinderRoot {
     status.set_margin_top(6);
     status.set_margin_bottom(8);
     let line = lang::t("status.line")
-      .replace("{count}", &model::item_count().to_string())
+      .replace("{count}", &model::item_count(&entries).to_string())
       .replace("{free}", &lang::t("status.free"));
     let status_label = markup_label(&line, 11, "normal", pal.secondary);
     status_label.set_halign(gtk::Align::Center);

@@ -1,9 +1,9 @@
 # Finder – Wiki
 
 Finder is the TontooOS file manager basis: a 1080x720 TontooUI window with
-a Tahoe-style sidebar (Favourites, Locations, Tags with CoreIcon SF
-Symbols), a toolbar row (navigation, view switch, actions, search), a
-folder icon grid and a status line. It follows the live system color
+a Tahoe-style sidebar (currently Favourites with Downloads), a toolbar
+row (navigation, view switch, actions, search), a live `~/Downloads/`
+grid and a status line. It follows the live system color
 scheme and loads `en_us`/`de_de` strings from `lang/`.
 
 - Repository: https://github.com/TontooOS/TontooOS
