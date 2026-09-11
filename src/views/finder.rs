@@ -182,7 +182,7 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   label.set_max_width_chars(16);
   label.set_ellipsize(gtk::pango::EllipsizeMode::End);
   let css = format!(
-    ".fd-label {{ font-family: '{}'; font-size: 12px; color: {}; }}",
+    ".fd-label {{ font-family: '{}'; font-size: 12px; font-weight: 600; color: {}; }}",
     SF_PRO, pal.fg
   );
   crate::UIKit::widget::apply_css(&label, &css);
