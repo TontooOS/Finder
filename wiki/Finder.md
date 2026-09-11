@@ -229,7 +229,9 @@ pub fn watch_dir(path: &Path) -> Option<(RecommendedWatcher, Receiver<()>)>
 Watches a directory (non-recursive) with `notify` and signals per
 file system event. The UI drains the channel on a 400ms main-thread
 tick and rebuilds the grid once per burst, so the Finder view stays
-in sync with the folder. Returns `None` when watching fails.
+in sync with the folder. Watcher rebuilds pause while an inline
+rename is open (`watch_refresh_allowed`); menu and edit signals
+always rebuild. Returns `None` when watching fails.
 
 ## Empty-space context menu
 
