@@ -104,6 +104,8 @@ fn bundle_icon_file(bundle: &Path) -> Option<PathBuf> {
 
 /// Raw icon file of a `.app` ZIP archive: the first candidate entry,
 /// extracted to a temp file keyed by the archive size plus mtime.
+/// Entries may sit behind a top-level prefix (`Demo.app/...`), so
+/// candidates match by path suffix.
 fn archive_icon_file(archive: &Path) -> Option<PathBuf> {
   let meta = std::fs::metadata(archive).ok()?;
   let mtime = meta
@@ -122,8 +124,13 @@ fn archive_icon_file(archive: &Path) -> Option<PathBuf> {
   }
   let file = std::fs::File::open(archive).ok()?;
   let mut zip = zip::ZipArchive::new(file).ok()?;
+  let names: Vec<String> = zip.file_names().map(str::to_string).collect();
   for candidate in APP_ICON_CANDIDATES {
-    if let Ok(mut entry) = zip.by_name(candidate) {
+    if let Some(hit) = names
+      .iter()
+      .find(|name| name.ends_with(candidate))
+    {
+      let mut entry = zip.by_name(hit).ok()?;
       let mut out = std::fs::File::create(&raw).ok()?;
       std::io::copy(&mut entry, &mut out).ok()?;
       return Some(raw);
@@ -363,6 +370,37 @@ mod tests {
       let mut zip = zip::ZipWriter::new(file);
       zip
         .start_file("Resources/icon.png", zip::write::SimpleFileOptions::default())
+        .unwrap();
+      let mut src = std::fs::File::open(&raw).unwrap();
+      std::io::copy(&mut src, &mut zip).unwrap();
+      zip.finish().unwrap();
+    }
+
+    let rendered = app_icon(&archive);
+    assert!(rendered.is_some());
+    assert!(rendered.unwrap().is_file());
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn app_icon_from_prefixed_bundle_zip() {
+    let base = std::env::temp_dir().join(format!("finder-test-apppre-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let raw = base.join("raw-icon.png");
+    write_test_png(&raw);
+
+    // TBuild layout: entries behind a top-level "<Name>.app/" prefix.
+    let archive = base.join("Demo.app");
+    {
+      let file = std::fs::File::create(&archive).unwrap();
+      let mut zip = zip::ZipWriter::new(file);
+      zip
+        .start_file(
+          "Demo.app/Resources/icon.png",
+          zip::write::SimpleFileOptions::default(),
+        )
         .unwrap();
       let mut src = std::fs::File::open(&raw).unwrap();
       std::io::copy(&mut src, &mut zip).unwrap();

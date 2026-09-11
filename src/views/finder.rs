@@ -27,7 +27,6 @@ struct Palette {
   bg: &'static str,
   fg: &'static str,
   secondary: &'static str,
-  separator: &'static str,
 }
 
 fn palette(dark: bool) -> Palette {
@@ -36,14 +35,12 @@ fn palette(dark: bool) -> Palette {
       bg: "#1d1d1d",
       fg: "#F5F5F7",
       secondary: "#A1A1A6",
-      separator: "rgba(255,255,255,0.10)",
     }
   } else {
     Palette {
       bg: "#ececec",
       fg: "#1E1E1E",
       secondary: "#6E6E73",
-      separator: "rgba(0,0,0,0.12)",
     }
   }
 }
@@ -293,14 +290,6 @@ impl Widget for FinderRoot {
     toolbar_row.append(&search_gtk);
 
     detail.append(&toolbar_row);
-
-    let sep = gtk::Separator::new(gtk::Orientation::Horizontal);
-    crate::UIKit::widget::apply_css(
-      &sep,
-      &format!(".finder-sep {{ background-color: {}; }}", pal.separator),
-    );
-    sep.add_css_class("finder-sep");
-    detail.append(&sep);
 
     let base = model::downloads_dir();
     let entries = model::list_downloads();

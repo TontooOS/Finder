@@ -114,8 +114,8 @@ pub fn display_name(name: &str, is_dir: bool) -> String {
 
 /// List a directory, directories first then files, each alphabetical
 /// (case-insensitive). Windows `Zone.Identifier` marker files are
-/// skipped (download metadata, not user files). Returns an empty list
-/// when unreadable.
+/// skipped (download metadata, not user files; WSL exposes them as
+/// `name:Zone.Identifier`). Returns an empty list when unreadable.
 pub fn list_dir(path: &Path) -> Vec<DirEntry> {
   let Ok(read) = std::fs::read_dir(path) else {
     return Vec::new();
@@ -126,7 +126,10 @@ pub fn list_dir(path: &Path) -> Vec<DirEntry> {
       let name = entry.file_name().to_string_lossy().into_owned();
       (entry, name)
     })
-    .filter(|(_, name)| !name.to_lowercase().ends_with(".zone.identifier"))
+    .filter(|(_, name)| {
+      let lower = name.to_lowercase();
+      !lower.ends_with(".zone.identifier") && !lower.contains(":zone.identifier")
+    })
     .map(|(entry, name)| {
       let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
       let is_app = name.to_lowercase().ends_with(".app");
@@ -257,6 +260,7 @@ mod tests {
     std::fs::create_dir_all(&base).unwrap();
     std::fs::write(base.join("wallpaper.jpg"), b"x").unwrap();
     std::fs::write(base.join("wallpaper.jpg.Zone.Identifier"), b"x").unwrap();
+    std::fs::write(base.join("notes.txt:Zone.Identifier"), b"x").unwrap();
 
     let entries = list_dir(&base);
     assert_eq!(entries.len(), 1);
