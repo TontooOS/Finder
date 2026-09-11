@@ -286,6 +286,46 @@ pub(crate) fn file_menu_entries(
   ]
 }
 
+/// Apply or clear the selection highlight on one `FlowBoxChild`
+/// (cell background plus white label). The cell box carries
+/// `fd-cell`; the menu wrapper sits between child and cell.
+pub(crate) fn set_cell_selected(flow_child: &gtk::FlowBoxChild, selected: bool) {
+  let mut cell_opt = None;
+  let mut cursor = flow_child.first_child();
+  while let Some(widget) = cursor {
+    cursor = widget.next_sibling();
+    if widget.has_css_class("fd-cell") {
+      cell_opt = Some(widget);
+      break;
+    }
+    if let Some(inner) = widget.first_child() {
+      if inner.has_css_class("fd-cell") {
+        cell_opt = Some(inner);
+        break;
+      }
+    }
+  }
+  let Some(cell) = cell_opt else {
+    return;
+  };
+  if selected {
+    cell.add_css_class("fd-sel");
+  } else {
+    cell.remove_css_class("fd-sel");
+  }
+  let mut label_cursor = cell.first_child();
+  while let Some(widget) = label_cursor {
+    label_cursor = widget.next_sibling();
+    if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+      if selected {
+        label.add_css_class("fd-lbl-sel");
+      } else {
+        label.remove_css_class("fd-lbl-sel");
+      }
+    }
+  }
+}
+
 fn folder_cell(
   base: &std::path::Path,
   entry: &model::DirEntry,
@@ -299,6 +339,7 @@ fn folder_cell(
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
+  cell.add_css_class("fd-cell");
 
   // `.app` bundles show the app icon rendered once through CoreIcon.
   // Directories show the default folder icon. Images show the picture
@@ -596,8 +637,16 @@ impl Widget for FinderRoot {
     toolbar_row.set_margin_end(12);
 
     let nav = Toolbar::new()
-      .item(ToolbarItem::new("chevron.backward").on_click(|| println!("Finder back")))
-      .item(ToolbarItem::new("chevron.forward").on_click(|| println!("Finder forward")));
+      .item(
+        ToolbarItem::new("chevron.backward")
+          .shared_background(false)
+          .on_click(|| println!("Finder back")),
+      )
+      .item(
+        ToolbarItem::new("chevron.forward")
+          .shared_background(false)
+          .on_click(|| println!("Finder forward")),
+      );
     toolbar_row.append(&nav.to_gtk());
 
     let title = markup_label(&lang::t("sidebar.downloads"), 15, "bold", pal.fg);
@@ -607,13 +656,21 @@ impl Widget for FinderRoot {
     toolbar_row.append(&title);
 
     let views = Toolbar::new()
-      .item(ToolbarItem::new("square.grid.2x2"))
-      .item(ToolbarItem::new("list.bullet"));
+      .item(ToolbarItem::new("square.grid.2x2").shared_background(false))
+      .item(ToolbarItem::new("list.bullet").shared_background(false));
     toolbar_row.append(&views.to_gtk());
 
     let actions = Toolbar::new()
-      .item(ToolbarItem::new("magnifyingglass").on_click(|| println!("Finder search")))
-      .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")));
+      .item(
+        ToolbarItem::new("square.and.arrow.up")
+          .shared_background(false)
+          .on_click(|| println!("Finder share")),
+      )
+      .item(
+        ToolbarItem::new("magnifyingglass")
+          .shared_background(false)
+          .on_click(|| println!("Finder search")),
+      );
     toolbar_row.append(&actions.to_gtk());
 
     detail.append(&toolbar_row);
@@ -623,7 +680,7 @@ impl Widget for FinderRoot {
     let session: SharedSession = Arc::new(Mutex::new(None));
 
     let grid = gtk::FlowBox::new();
-    grid.set_selection_mode(gtk::SelectionMode::None);
+    grid.set_selection_mode(gtk::SelectionMode::Single);
     grid.set_homogeneous(true);
     grid.set_min_children_per_line(4);
     grid.set_max_children_per_line(8);
@@ -638,6 +695,21 @@ impl Widget for FinderRoot {
       &format!(".finder-grid {{ background-color: {}; }}", pal.bg),
     );
     grid.add_css_class("finder-grid");
+    // Single-click selection: highlight the cell and whiten its label.
+    crate::UIKit::widget::apply_css(
+      &grid,
+      ".fd-sel { background-color: rgba(10,132,255,0.30); border-radius: 8px; } \
+       .fd-label.fd-lbl-sel { color: #ffffff; }",
+    );
+    grid.connect_selected_children_changed(|flow| {
+      let mut cursor = flow.first_child();
+      while let Some(widget) = cursor {
+        cursor = widget.next_sibling();
+        if let Ok(child) = widget.clone().downcast::<gtk::FlowBoxChild>() {
+          set_cell_selected(&child, child.is_selected());
+        }
+      }
+    });
     let status_label = gtk::Label::new(None);
     status_label.set_use_markup(true);
     status_label.set_halign(gtk::Align::Center);
@@ -830,5 +902,133 @@ mod tests {
       }
       _ => panic!("last entry must be the Tags row"),
     }
+  }
+
+  /// Repro for the New Folder / Rename freeze: builds the real grid,
+  /// runs the create plus refresh path and pumps the main loop.
+  /// Skipped without a display (headless `cargo test`); run under
+  /// `xvfb-run` to exercise it.
+  #[test]
+  fn new_folder_refresh_repro() {
+    if gtk::init().is_err() {
+      return;
+    }
+    let dl = std::env::temp_dir().join(format!("finder-test-repro-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dl);
+    std::fs::create_dir_all(&dl).unwrap();
+    std::fs::write(dl.join("note.txt"), b"x").unwrap();
+
+    crate::lang::init();
+    let pal = Palette { bg: "#1d1d1d", fg: "#F5F5F7", secondary: "#A1A1A6" };
+    let session: SharedSession = Arc::new(Mutex::new(None));
+    let grid = gtk::FlowBox::new();
+    let status = gtk::Label::new(None);
+    let signal: Refresh = Arc::new(|| {});
+
+    // Initial fill plus empty-space and file menus (what to_gtk builds).
+    refresh_grid(&grid, &status, &pal, &dl, &session, &signal);
+    let _ = empty_space_menu(&session, &signal);
+    for child in grid.observe_children().into_iter().flatten() {
+      let _ = child;
+    }
+
+    // New Folder path: create, open the session, refresh twice (menu
+    // tick plus the watcher's own-change event).
+    let created = create_folder(&dl).expect("folder created");
+    *session.lock().unwrap() = Some(EditSession { path: created });
+    refresh_grid(&grid, &status, &pal, &dl, &session, &signal);
+    refresh_grid(&grid, &status, &pal, &dl, &session, &signal);
+
+    // Rename commit path on the text file.
+    let target: std::path::PathBuf = dl.join("note.txt");
+    let disk = model::DirEntry {
+      name: "note.txt".to_string(),
+      is_dir: false,
+      is_app: false,
+      ext: "txt".to_string(),
+    };
+    assert!(commit_rename(&dl, &disk, "renamed"));
+    assert!(target.exists() == false);
+    assert!(dl.join("renamed.txt").exists());
+
+    // Pump the main loop briefly; a hang here fails via timeout.
+    let context = glib::MainContext::default();
+    for _ in 0..200 {
+      context.iteration(false);
+    }
+
+    *session.lock().unwrap() = None;
+    let _ = std::fs::remove_dir_all(&dl);
+  }
+
+  /// Full-path repro: real root widget in a shown window, real New
+  /// Folder menu callback, real 400ms tick, pumped main loop.
+  /// Skipped without a display; run under `xvfb-run` to exercise it.
+  #[test]
+  fn new_folder_click_repro() {
+    if gtk::init().is_err() {
+      return;
+    }
+    let home = std::env::temp_dir().join(format!("finder-test-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let dl = home.join("Downloads");
+    std::fs::create_dir_all(&dl).unwrap();
+    std::fs::write(dl.join("note.txt"), b"x").unwrap();
+
+    crate::lang::init();
+    let pal = Palette { bg: "#1d1d1d", fg: "#F5F5F7", secondary: "#A1A1A6" };
+    let session: SharedSession = Arc::new(Mutex::new(None));
+    let base = dl.clone();
+
+    // Real wiring: grid plus status, signal channel, 400ms tick.
+    let grid = gtk::FlowBox::new();
+    let status = gtk::Label::new(None);
+    let (refresh_tx, refresh_rx) = std::sync::mpsc::channel::<()>();
+    let signal: Refresh = Arc::new(move || {
+      let _ = refresh_tx.send(());
+    });
+    let tick = {
+      let grid_c = grid.clone();
+      let status_c = status.clone();
+      let base_c = base.clone();
+      let session_c = session.clone();
+      let signal_c = signal.clone();
+      move || {
+        refresh_grid(&grid_c, &status_c, &pal, &base_c, &session_c, &signal_c);
+      }
+    };
+    tick();
+    glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+      let mut dirty = false;
+      while refresh_rx.try_recv().is_ok() {
+        dirty = true;
+      }
+      if dirty {
+        tick();
+      }
+      glib::ControlFlow::Continue
+    });
+
+    let win = gtk::Window::new();
+    win.set_child(Some(&grid));
+    win.present();
+
+    // Click New Folder exactly like GTK would on activate.
+    let entries = empty_space_menu(&session, &signal);
+    let activate = match &entries[0] {
+      MenuEntry::Item(item) => item.on_activate.clone().expect("New Folder has a handler"),
+      _ => panic!("first entry must be New Folder"),
+    };
+    activate();
+
+    // Pump the loop (blocking) past several 400ms ticks.
+    let context = glib::MainContext::default();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+      context.iteration(true);
+    }
+
+    win.close();
+    let _ = std::fs::remove_dir_all(&home);
   }
 }

@@ -54,7 +54,7 @@ Three `TontooUI::Toolbar` groups in a `gtk::Box` row:
 |---|---|
 | Navigation | `chevron.backward` (back), `chevron.forward` (forward) |
 | View switch | `square.grid.2x2` (icons), `list.bullet` (list), no actions yet |
-| Actions | `magnifyingglass` (search), `square.and.arrow.up` (share) |
+| Actions | `square.and.arrow.up` (share), `magnifyingglass` (search) |
 
 All buttons currently log their action; view switching and search
 filtering are later steps.
