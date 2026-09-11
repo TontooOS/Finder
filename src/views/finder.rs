@@ -12,7 +12,7 @@ use crate::icons;
 use crate::lang;
 use crate::model;
 use crate::TontooUI::{
-  ContentUnavailableView, Sidebar, SidebarIcon, TextInput, Toolbar, ToolbarItem,
+  ContentUnavailableView, Sidebar, SidebarIcon, Toolbar, ToolbarItem,
 };
 use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
@@ -275,17 +275,9 @@ impl Widget for FinderRoot {
     toolbar_row.append(&views.to_gtk());
 
     let actions = Toolbar::new()
-      .item(ToolbarItem::new("arrow.up.arrow.down").on_click(|| println!("Finder sort")))
-      .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
-      .item(ToolbarItem::new("tag").on_click(|| println!("Finder tag")));
+      .item(ToolbarItem::new("magnifyingglass").on_click(|| println!("Finder search")))
+      .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")));
     toolbar_row.append(&actions.to_gtk());
-
-    let search = TextInput::new(lang::t("detail.search")).on_change(|text| {
-      println!("Finder search: {}", text);
-    });
-    let search_gtk = search.to_gtk();
-    search_gtk.set_size_request(170, -1);
-    toolbar_row.append(&search_gtk);
 
     detail.append(&toolbar_row);
 

@@ -48,15 +48,13 @@ Rules:
 
 ## Toolbar row
 
-Three `TontooUI::Toolbar` groups plus a `TontooUI::TextInput` search
-field in a `gtk::Box` row:
+Three `TontooUI::Toolbar` groups in a `gtk::Box` row:
 
 | Group | Items |
 |---|---|
 | Navigation | `chevron.backward` (back), `chevron.forward` (forward) |
 | View switch | `square.grid.2x2` (icons), `list.bullet` (list), no actions yet |
-| Actions | `arrow.up.arrow.down` (sort), `square.and.arrow.up` (share), `tag` (tag) |
-| Search | `TextInput` with `detail.search` placeholder, 170px wide |
+| Actions | `magnifyingglass` (search), `square.and.arrow.up` (share) |
 
 All buttons currently log their action; view switching and search
 filtering are later steps.
@@ -305,5 +303,4 @@ lookup covers the bundle layout
 - [MAIN.md](MAIN.md) -- wiki entry point
 - TontooUI Sidebar -- sidebar with traffic lights, sections and item list
 - TontooUI Toolbar -- glass capsule toolbar with items
-- TontooUI TextInput -- single-line search field
 - CoreIcon SF Symbols -- sidebar and toolbar icon artwork
