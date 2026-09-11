@@ -168,22 +168,67 @@ fn rounded_preview(path: &std::path::Path) -> gtk::Box {
   holder
 }
 
-/// Right-click on a file cell claims the press so it never reaches
-/// the empty-space `ContextMenu` wrapper: file right-clicks show
-/// nothing (for now).
-fn suppress_file_menu(cell: &gtk::Box) {
-  let claim = gtk::GestureClick::new();
-  claim.set_button(3);
-  claim.connect_pressed(|_, _, _, _| {});
-  cell.add_controller(claim);
+/// Tag dot colors for the file menu Tags row (red, orange, yellow,
+/// green, blue, purple, gray).
+const TAG_DOT_COLORS: [(u8, u8, u8); 7] = [
+  (255, 59, 48),
+  (255, 149, 0),
+  (255, 204, 0),
+  (52, 199, 89),
+  (0, 122, 255),
+  (175, 82, 222),
+  (142, 142, 147),
+];
+
+/// File context menu entries for one display name. Actions log for
+/// now; Open With and Share carry a trailing disclosure icon.
+pub(crate) fn file_menu_entries(name: &str) -> Vec<MenuEntry> {
+  vec![
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.open")).on_activate(|| println!("Finder open")),
+    ),
+    MenuEntry::Item(MenuItem::new(lang::t("context.open_with")).trailing_icon("arrowtriangle.forward.fill")),
+    MenuEntry::Divider,
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.move_to_trash"))
+        .on_activate(|| println!("Finder move to trash")),
+    ),
+    MenuEntry::Divider,
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.get_info")).on_activate(|| println!("Finder get info")),
+    ),
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.rename")).on_activate(|| println!("Finder rename")),
+    ),
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.compress")).on_activate(|| println!("Finder compress")),
+    ),
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.duplicate")).on_activate(|| println!("Finder duplicate")),
+    ),
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.share"))
+        .trailing_icon("arrowtriangle.forward.fill")
+        .on_activate(|| println!("Finder share")),
+    ),
+    MenuEntry::Divider,
+    MenuEntry::Item(
+      MenuItem::new(lang::t("context.copy").replace("{name}", name))
+        .on_activate(|| println!("Finder copy")),
+    ),
+    MenuEntry::Divider,
+    MenuEntry::TagDots {
+      title: lang::t("context.tags"),
+      colors: TAG_DOT_COLORS.to_vec(),
+    },
+  ]
 }
 
-fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -> gtk::Box {
+fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -> gtk::Widget {
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
   cell.set_size_request(112, -1);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
-  suppress_file_menu(&cell);
 
   // `.app` bundles show the app icon rendered once through CoreIcon.
   // Directories show the default folder icon. Images show the picture
@@ -245,7 +290,10 @@ fn folder_cell(base: &std::path::Path, entry: &model::DirEntry, pal: &Palette) -
   label.add_css_class("fd-label");
   cell.append(&label);
 
-  cell
+  // Per-file context menu. The inner gesture claims the press first,
+  // so the empty-space menu on the scroll area stays hidden over files.
+  let menu = ContextMenu::new(GtkWrap::wrap(cell)).entries(file_menu_entries(&shown));
+  menu.to_gtk()
 }
 
 /// Empty-space context menu entries: New Folder, divider, Get Info,
@@ -522,6 +570,38 @@ mod tests {
         assert_eq!(item_label(&items[0]), Some(lang::t("context.text_file").as_str()));
       }
       _ => panic!("last entry must be the New File submenu"),
+    }
+  }
+
+  #[test]
+  fn file_menu_structure() {
+    let entries = file_menu_entries("wallpaper");
+    assert_eq!(entries.len(), 14);
+    assert_eq!(item_label(&entries[0]), Some(lang::t("context.open").as_str()));
+    match &entries[1] {
+      MenuEntry::Item(item) => {
+        assert_eq!(item.label, lang::t("context.open_with"));
+        assert_eq!(
+          item.trailing_icon.as_deref(),
+          Some("arrowtriangle.forward.fill")
+        );
+      }
+      _ => panic!("second entry must be Open With"),
+    }
+    assert!(matches!(entries[2], MenuEntry::Divider));
+    assert!(matches!(entries[4], MenuEntry::Divider));
+    assert!(matches!(entries[10], MenuEntry::Divider));
+    assert_eq!(
+      item_label(&entries[11]),
+      Some(lang::t("context.copy").replace("{name}", "wallpaper").as_str())
+    );
+    assert!(matches!(entries[12], MenuEntry::Divider));
+    match &entries[13] {
+      MenuEntry::TagDots { title, colors } => {
+        assert_eq!(title, &lang::t("context.tags"));
+        assert_eq!(colors.len(), 7);
+      }
+      _ => panic!("last entry must be the Tags row"),
     }
   }
 }

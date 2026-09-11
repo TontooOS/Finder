@@ -222,9 +222,31 @@ Right-clicking empty grid space shows a TontooUI `ContextMenu`
 | 4 | Divider |
 | 5 | `context.new_file` submenu (New File) with `context.text_file` (Text File, no action yet) |
 
-Right-clicking a file cell claims the press (`suppress_file_menu`),
-so the menu stays hidden over files. All actions log for now;
-creating folders/files and the info panel are later steps.
+Each file cell carries its own `ContextMenu` (see below); its inner
+gesture claims the press first, so this menu stays hidden over files.
+All actions log for now; creating folders/files and the info panel
+are later steps.
+
+## File context menu
+
+Right-clicking a file or folder shows a per-file `ContextMenu`
+(`file_menu_entries(name)` in `src/views/finder.rs`). The inner cell
+gesture claims the press first, so the empty-space menu stays hidden
+over files.
+
+| Order | Entry |
+|---|---|
+| 1 | `context.open` (Open, logs for now) |
+| 2 | `context.open_with` (Open With) with trailing `arrowtriangle.forward.fill`, no action |
+| 3 | Divider |
+| 4 | `context.move_to_trash` (Move to Trash, logs for now) |
+| 5 | Divider |
+| 6 | `context.get_info`, `context.rename`, `context.compress`, `context.duplicate` (all log for now) |
+| 7 | `context.share` (Share) with trailing `arrowtriangle.forward.fill`, logs for now |
+| 8 | Divider |
+| 9 | `context.copy` (`Copy "{name}"` with the file name, logs for now) |
+| 10 | Divider |
+| 11 | `context.tags` (Tags...) with the 7 tag dots, no action |
 
 ### `app_icon`
 
@@ -316,6 +338,15 @@ localized `name` in `Info.tontoo`). Keep both locations in sync.
 | `context.get_info` | `Get Info` | `Informationen` |
 | `context.new_file` | `New File` | `Neue Datei` |
 | `context.text_file` | `Text File` | `Textdatei` |
+| `context.open` | `Open` | `Öffnen` |
+| `context.open_with` | `Open With` | `Öffnen mit` |
+| `context.move_to_trash` | `Move to Trash` | `In den Papierkorb legen` |
+| `context.rename` | `Rename` | `Umbenennen` |
+| `context.compress` | `Compress` | `Komprimieren` |
+| `context.duplicate` | `Duplicate` | `Duplizieren` |
+| `context.share` | `Share` | `Teilen` |
+| `context.copy` | `Copy "{name}"` | `"{name}" kopieren` |
+| `context.tags` | `Tags...` | `Tags …` |
 
 ### `t(key)`
 
