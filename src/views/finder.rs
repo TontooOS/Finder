@@ -200,34 +200,38 @@ fn folder_icon_art() -> gtk::Box {
   }
 }
 
-/// Prepare the idle popover inside a `ContextMenu` wrapper. The popup
-/// menu content carries `min-width: 180px`; if the popover takes part
-/// in measuring, it drives the wrapped widget's minimum width
-/// (FlowBox columns grew to ~230px, showing 5 instead of 8).
-/// `set_child_visible(false)` removes it from measurement while
-/// keeping it fully presentable: unlike `set_visible(false)` (which
-/// broke GTK's popover state machine: no grab, no autohide, and
-/// `popdown()` no longer removing the surface), the popover still
-/// grabs on `popup()`, autohide dismisses on outside clicks, and
-/// `popdown()` works. Every wrapper popover is also registered
-/// below so selection changes and rebuilds can dismiss menus
-/// explicitly.
-fn prepare_menu_popover(wrapper: &gtk::Widget) {
+/// Find the popover child of a `ContextMenu` wrapper (the popup
+/// menu content carries `min-width: 180px`; left parented it drives
+/// the wrapped widget's minimum width, so FlowBox columns grew to
+/// ~230px, showing 5 instead of 8).
+fn find_menu_popover(wrapper: &gtk::Widget) -> Option<gtk::Popover> {
   let mut cursor = wrapper.first_child();
   while let Some(widget) = cursor {
     cursor = widget.next_sibling();
     if let Ok(pop) = widget.clone().downcast::<gtk::Popover>() {
-      pop.set_child_visible(false);
-      OPEN_MENUS.with(|slot| slot.borrow_mut().push(pop.downgrade()));
+      return Some(pop);
     }
   }
+  None
 }
 
 thread_local! {
-  /// Weak handles of every context-menu popover (cells, rows,
-  /// empty-space areas). Dead entries are pruned on each dismiss.
-  static OPEN_MENUS: RefCell<Vec<glib::WeakRef<gtk::Popover>>> =
-    RefCell::new(Vec::new());
+  /// Every context-menu popover plus whether it may hang detached:
+  /// cell/row popovers (`true`) live unparented while idle (zero
+  /// size contribution, kept alive by this registry) and are
+  /// re-attached on right-press before the SDK popup runs, so
+  /// coordinates, grab, autohide and popdown all behave like a
+  /// textbook popover. Scroll/empty-space popovers (`false`) stay
+  /// parented (their wide hosts do not care). The registry is
+  /// cleared on every rebuild; entries never outlive their view.
+  static OPEN_MENUS: RefCell<Vec<(gtk::Popover, bool)>> = RefCell::new(Vec::new());
+}
+
+/// Forget all registered popovers. Called on rebuild after
+/// `popdown_all_menus`, so fresh wrappers register fresh popovers
+/// and nothing stale survives.
+fn forget_menus() {
+  OPEN_MENUS.with(|slot| slot.borrow_mut().clear());
 }
 
 /// Dismiss every known context menu. Called on any press inside
@@ -237,21 +241,21 @@ thread_local! {
 /// toplevel exists); the quiet path runs on every click.
 fn popdown_all_menus() {
   OPEN_MENUS.with(|slot| {
-    let mut guard = slot.borrow_mut();
-    let mut live = 0;
+    let guard = slot.borrow();
     let mut open = 0;
-    guard.retain(|weak| {
-      if let Some(pop) = weak.upgrade() {
-        live += 1;
-        if pop.is_visible() {
-          open += 1;
-        }
-        popdown_tree(&pop);
-        true
-      } else {
-        false
+    for (pop, detachable) in guard.iter() {
+      if pop.is_visible() {
+        open += 1;
       }
-    });
+      popdown_tree(pop);
+      // Detached-again after dismiss: the next measure must see the
+      // bare cell/row, and teardown must never meet a mapped child.
+      if *detachable && pop.parent().is_some() {
+        pop.unparent();
+      }
+    }
+    let live = guard.len();
+    drop(guard);
     // Toplevel census: an open menu is its own toplevel surface, so
     // a stuck-but-dead menu shows up here even when its widgets are
     // gone. Baseline is 1 (the main window).
@@ -307,9 +311,10 @@ fn active_flipped(prev: Option<bool>, current: bool) -> bool {
   matches!(prev, Some(p) if p != current)
 }
 
-/// Dismiss one popover plus nested submenu popovers (child first),
-/// then hide explicitly: popdown alone does not remove every
-/// visible surface, leaving dead windows behind.
+/// Dismiss one popover plus nested submenu popovers (child first).
+/// No visibility flags are touched: with textbook presentation
+/// (correct parent at popup time) plain `popdown()` removes the
+/// surface, and any visibility override risks the state machine.
 fn popdown_tree(pop: &gtk::Popover) {
   fn walk(node: &gtk::Widget) {
     let mut cursor = node.first_child();
@@ -318,7 +323,6 @@ fn popdown_tree(pop: &gtk::Popover) {
       if let Ok(child) = widget.clone().downcast::<gtk::Popover>() {
         walk(&child.clone().upcast());
         child.popdown();
-        child.set_visible(false);
       } else {
         walk(&widget);
       }
@@ -328,12 +332,20 @@ fn popdown_tree(pop: &gtk::Popover) {
   let root: gtk::Widget = pop.clone().upcast();
   walk(&root);
   pop.popdown();
-  pop.set_visible(false);
   if before {
     eprintln!(
       "[finder][menu] dismissed open menu, visible_after={}",
       pop.is_visible()
     );
+  }
+}
+
+/// Register a scroll/empty-space menu popover. It stays parented
+/// (wide hosts do not care about the 180px content); only cell/row
+/// popovers hang detached (see `file_menu_wrap`).
+fn register_menu_popover(wrapper: &gtk::Widget) {
+  if let Some(pop) = find_menu_popover(wrapper) {
+    OPEN_MENUS.with(|slot| slot.borrow_mut().push((pop, false)));
   }
 }
 
@@ -355,7 +367,30 @@ fn file_menu_wrap(
     refresh,
   ));
   let wrapped = menu.to_gtk();
-  prepare_menu_popover(&wrapped);
+  if let Some(pop) = find_menu_popover(&wrapped) {
+    // Idle popovers hang detached (zero size contribution, kept
+    // alive by the registry). A capture gesture re-attaches right
+    // before the SDK popup runs (capture beats bubble), so the
+    // popup gets correct coordinates, grab and autohide. Guards on
+    // both calls: double presses must neither warn nor misparent.
+    if pop.parent().is_some() {
+      pop.unparent();
+    }
+    OPEN_MENUS.with(|slot| slot.borrow_mut().push((pop.clone(), true)));
+    let pop_c = pop;
+    let wrap_w = wrapped.downgrade();
+    let reattach = gtk::GestureClick::new();
+    reattach.set_button(3);
+    reattach.set_propagation_phase(gtk::PropagationPhase::Capture);
+    reattach.connect_pressed(move |_, _, _, _| {
+      if let Some(container) = wrap_w.upgrade() {
+        if pop_c.parent().is_none() {
+          pop_c.set_parent(&container);
+        }
+      }
+    });
+    wrapped.add_controller(reattach);
+  }
   wrapped
 }
 
@@ -576,8 +611,10 @@ fn title_markup(name: &str, pal: &Palette) -> String {
 
 /// Rebuild the content area for the active view: icon grid or list.
 fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
-  // Dismiss menus before tearing down their widgets.
+  // Dismiss menus before tearing down their widgets, then forget
+  // them: fresh wrappers register fresh popovers below.
   popdown_all_menus();
+  forget_menus();
   let mut child = ctx.slot.first_child();
   while let Some(widget) = child {
     child = widget.next_sibling();
@@ -606,7 +643,7 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
         let wrapped = ContextMenu::new(GtkWrap::wrap(ctx.grid_scroll.clone()))
           .entries(empty_space_menu(&base, &ctx.session, &ctx.refresh))
           .to_gtk();
-        prepare_menu_popover(&wrapped);
+        register_menu_popover(&wrapped);
         wrapped.set_hexpand(true);
         wrapped.set_vexpand(true);
         ctx.slot.append(&wrapped);
@@ -900,7 +937,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
       .entries(empty_space_menu(&base, &ctx.session, &ctx.refresh));
     let menu_gtk = menu.to_gtk();
-    prepare_menu_popover(&menu_gtk);
+    register_menu_popover(&menu_gtk);
     menu_gtk.set_hexpand(true);
     menu_gtk.set_vexpand(true);
     content.append(&menu_gtk);
