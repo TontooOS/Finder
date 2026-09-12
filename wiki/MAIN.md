@@ -33,6 +33,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Scaled the whole grid down 25% (84px cells, 48px artwork, 54px folders) with one shared `PREVIEW_SIZE`.
 - 2026-09-12: Hide idle menu popovers so columns fit 8 across, folders render at 72px for visual parity, and the column width is logged.
 - 2026-09-12: Fixed square 112x112 cells with uniform 64x64 artwork (`gtk::Picture`, `Contain` fit) and dynamic FlowBox reflow on window resize.
 - 2026-09-12: Share icon textures across cells (`shared_paintable`) and use the `image.png`/`video.png` placeholders, cutting ~30ms of SVG rasterization per entry per rebuild.

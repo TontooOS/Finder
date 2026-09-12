@@ -158,19 +158,20 @@ fn fitted_picture_sized(paintable: &gdk4::Paintable, size: i32) -> gtk::Picture 
 }
 
 /// Fixed artwork size (square) shared by every grid cell.
-const ARTWORK: i32 = 64;
+/// Mirrors `icons::PREVIEW_SIZE` so cached previews match the screen.
+const ARTWORK: i32 = icons::PREVIEW_SIZE as i32;
 /// Folder artwork renders slightly larger: the folder glyph carries
-/// transparent padding (~58x46px of its 64px box) while app and
-/// document icons are full-bleed, so equal boxes made folders look
-/// smaller. 72px keeps visual parity and still fits the 112px cell.
-const FOLDER_ARTWORK: i32 = 72;
+/// transparent padding while app and document icons are full-bleed,
+/// so equal boxes made folders look smaller. 54px keeps visual
+/// parity within the 84px cell.
+const FOLDER_ARTWORK: i32 = 54;
 /// Fixed square cell size: artwork plus two label lines fit inside,
 /// so every cell measures the same in all four directions.
-const CELL: i32 = 112;
+const CELL: i32 = 84;
 
 /// Light artwork viewing a shared icon texture. The file is decoded
 /// and rasterized once per process (`icons::shared_paintable`);
-/// every cell gets a cheap view scaled into the fixed 64x64 square
+/// every cell gets a cheap view scaled into the fixed square
 /// instead of paying ~30ms of SVG rasterization per rebuild.
 fn icon_image(path: &std::path::Path) -> gtk::Picture {
   icon_image_sized(path, ARTWORK)

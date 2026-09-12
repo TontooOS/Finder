@@ -12,6 +12,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Grid artwork size (square). Single source for the cached photo
+/// previews and the on-screen artwork, so both always match.
+pub const PREVIEW_SIZE: u32 = 48;
+
 /// Candidate directories holding the `Resources/` folder.
 fn resources_dirs() -> Vec<PathBuf> {
   let mut dirs = Vec::new();
@@ -378,7 +382,7 @@ pub fn photo_preview(source: &Path) -> Option<PathBuf> {
   }
   let t0 = std::time::Instant::now();
   let img = image::open(source).ok()?;
-  let mut square = cover_square(&img, 64);
+  let mut square = cover_square(&img, PREVIEW_SIZE);
   round_corners(&mut square, 10);
   if let Some(parent) = cached.parent() {
     let _ = std::fs::create_dir_all(parent);
@@ -668,7 +672,8 @@ mod tests {
     let rendered = first.unwrap();
     assert!(rendered.is_file());
     let img = image::open(&rendered).unwrap();
-    assert_eq!((img.width(), img.height()), (64, 64));
+    // Rounded preview matches the shared grid artwork size.
+    assert_eq!((img.width(), img.height()), (PREVIEW_SIZE, PREVIEW_SIZE));
 
     let _ = std::fs::remove_dir_all(&base);
     let _ = std::fs::remove_file(&rendered);
