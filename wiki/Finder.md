@@ -388,12 +388,25 @@ main thread, so the tick only rebuilds when this snapshot differs.
 ### `refresh_grid`
 
 ```rust
-fn refresh_grid(grid: &FlowBox, status: &Label, pal: &Palette, base: &Path, session: &SharedSession, refresh: &Refresh)
+fn refresh_grid(grid: &FlowBox, status: &Label, pal: &Palette, base: &Path, session: &SharedSession, refresh: &Refresh, listed: &Rc<RefCell<Vec<ListedEntry>>>, rebuild: &Rebuild)
 ```
 
 Clears the grid and rebuilds it from `list_dir(base)` plus the status
 line. Always lists `base` (never a hardcoded folder), so the shown
-entries match the watched directory.
+entries match the watched directory. Records the listing for
+double-click lookup and wires right-click selection per cell.
+
+### `set_cell_selected`
+
+```rust
+fn set_cell_selected(flow_child: &FlowBoxChild, selected: bool)
+```
+
+macOS-style selection: gray rounded background behind the icon
+(`fd-art-sel`, scheme-aware) plus blue tightly around the label
+text with white letters (`fd-lbl-sel`, never a full-width bar).
+Walks the cell recursively (artwork and labels sit inside their
+menu wrappers).
 
 ## Empty-space context menu
 

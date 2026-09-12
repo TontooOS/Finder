@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: macOS-style grid selection (gray behind icon, blue tightly around label text).
 - 2026-09-12: Search field slides in/out with a revealer animation.
 - 2026-09-12: Search swaps run as idle callbacks (no toolbar mutation mid-emission, no `get_parent` criticals).
 - 2026-09-12: Status line shows live free space (`statvfs`) with German decimal comma, `status.free` as fallback.

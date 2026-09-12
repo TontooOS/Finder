@@ -206,6 +206,7 @@ fn folder_icon_art() -> gtk::Box {
     Some(path) => {
       let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
       holder.set_halign(gtk::Align::Center);
+      holder.add_css_class("fd-art");
       holder.append(&icon_image_sized(&path, FOLDER_ARTWORK));
       holder
     }
@@ -1069,6 +1070,7 @@ fn folder_art() -> gtk::Box {
 fn preview_image(path: &std::path::Path) -> gtk::Box {
   let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
   holder.set_halign(gtk::Align::Center);
+  holder.add_css_class("fd-art");
   holder.append(&icon_image(path));
   holder
 }
@@ -1121,6 +1123,7 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
 fn rounded_preview(path: &std::path::Path) -> gtk::Box {
   let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
   holder.set_halign(gtk::Align::Center);
+  holder.add_css_class("fd-art");
   holder.append(&preview_art(path, true));
   holder
 }
@@ -1199,44 +1202,35 @@ pub(crate) fn file_menu_entries(
   ]
 }
 
-/// Apply or clear the selection highlight on one `FlowBoxChild`
-/// (cell background plus white label). The cell box carries
-/// `fd-cell`; the menu wrapper sits between child and cell.
+/// Apply or clear the selection highlight on one `FlowBoxChild`,
+/// macOS style: gray rounded background behind the icon plus a blue
+/// rounded background tightly around the label text (white text).
+/// Artwork holders carry `fd-art`, labels `fd-label`; both sit
+/// inside their file-menu wrappers, so the walk is recursive.
 pub(crate) fn set_cell_selected(flow_child: &gtk::FlowBoxChild, selected: bool) {
-  let mut cell_opt = None;
-  let mut cursor = flow_child.first_child();
-  while let Some(widget) = cursor {
-    cursor = widget.next_sibling();
-    if widget.has_css_class("fd-cell") {
-      cell_opt = Some(widget);
-      break;
-    }
-    if let Some(inner) = widget.first_child() {
-      if inner.has_css_class("fd-cell") {
-        cell_opt = Some(inner);
-        break;
-      }
-    }
-  }
-  let Some(cell) = cell_opt else {
-    return;
-  };
-  if selected {
-    cell.add_css_class("fd-sel");
-  } else {
-    cell.remove_css_class("fd-sel");
-  }
-  let mut label_cursor = cell.first_child();
-  while let Some(widget) = label_cursor {
-    label_cursor = widget.next_sibling();
-    if let Ok(label) = widget.clone().downcast::<gtk::Label>() {
+  fn walk(widget: &gtk::Widget, selected: bool) {
+    if widget.has_css_class("fd-art") {
       if selected {
-        label.add_css_class("fd-lbl-sel");
+        widget.add_css_class("fd-art-sel");
       } else {
-        label.remove_css_class("fd-lbl-sel");
+        widget.remove_css_class("fd-art-sel");
       }
     }
+    if widget.has_css_class("fd-label") {
+      if selected {
+        widget.add_css_class("fd-lbl-sel");
+      } else {
+        widget.remove_css_class("fd-lbl-sel");
+      }
+    }
+    let mut cursor = widget.first_child();
+    while let Some(child) = cursor {
+      cursor = child.next_sibling();
+      walk(&child, selected);
+    }
   }
+  let root: gtk::Widget = flow_child.clone().upcast();
+  walk(&root, selected);
 }
 
   fn folder_cell(
@@ -1836,11 +1830,21 @@ impl Widget for FinderRoot {
       &format!(".finder-grid {{ background-color: {}; }}", pal.bg),
     );
     grid.add_css_class("finder-grid");
-    // Single-click selection: highlight the cell and whiten its label.
+    // Single-click selection, macOS style: gray rounded background
+    // behind the icon plus blue tightly around the label text (no
+    // full-width bar). Colors follow the scheme.
+    let (art_sel, lbl_sel) = if dark {
+      ("rgba(255,255,255,0.18)", "rgba(10,132,255,1.0)")
+    } else {
+      ("rgba(0,0,0,0.12)", "rgba(0,122,255,1.0)")
+    };
     crate::UIKit::widget::apply_css(
       &grid,
-      ".fd-sel { background-color: rgba(10,132,255,0.30); border-radius: 8px; } \
-       .fd-label.fd-lbl-sel { color: #ffffff; }",
+      &format!(
+        ".fd-art.fd-art-sel {{ background-color: {art_sel}; border-radius: 8px; padding: 3px; }} \
+         .fd-label.fd-lbl-sel {{ background-color: {lbl_sel}; color: #ffffff; \
+         border-radius: 4px; padding: 1px 4px; }}"
+      ),
     );
     grid.connect_selected_children_changed(|flow| {
       // A new selection dismisses any open menu first.
