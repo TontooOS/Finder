@@ -1157,7 +1157,7 @@ impl Widget for FinderRoot {
         SidebarIcon::sf("arrow.down.circle.fill", blue()),
       )
       .selected(0)
-      .search_placeholder(lang::t("sidebar.search"))
+      .no_search()
       .width(SIDEBAR_WIDTH)
       .on_select(|i| println!("Finder selected: {}", i));
     outer.append(&sidebar.to_gtk());

@@ -24,7 +24,8 @@ app.run();
 ## Sidebar
 
 `TontooUI::Sidebar` with the `coreicon` feature (default). Currently a
-single Favourites section with the Downloads row; Locations and Tags
+single Favourites section with the Downloads row, without the
+search field (`.no_search()`); Locations and Tags
 sections are later steps.
 
 | Section | Rows |
@@ -36,7 +37,7 @@ let sidebar = Sidebar::new()
   .section(lang::t("sidebar.favourites"))
   .item(lang::t("sidebar.downloads"), SidebarIcon::sf("arrow.down.circle.fill", blue()))
   .selected(0)
-  .search_placeholder(lang::t("sidebar.search"))
+  .no_search()
   .width(240.0)
   .on_select(|i| println!("Finder selected: {}", i));
 ```
