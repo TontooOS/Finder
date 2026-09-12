@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Dead menu areas (dividers, padding, tags) dismiss only the menu via hit-testing; button presses run actions.
 - 2026-09-12: Detach idle cell/row popovers and re-attach before popup (narrow columns with textbook grab/autohide/popdown).
 - 2026-09-12: Folder navigation (double-click/Enter opens folders, back/forward history, title follows, watcher re-armed per folder).
 - 2026-09-12: Keep popovers out of measurement with `set_child_visible` instead of `set_visible` (fixes broken grab/autohide/popdown).

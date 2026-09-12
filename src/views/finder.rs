@@ -345,7 +345,37 @@ fn popdown_tree(pop: &gtk::Popover) {
 /// popovers hang detached (see `file_menu_wrap`).
 fn register_menu_popover(wrapper: &gtk::Widget) {
   if let Some(pop) = find_menu_popover(wrapper) {
+    attach_menu_background_dismiss(&pop);
     OPEN_MENUS.with(|slot| slot.borrow_mut().push((pop, false)));
+  }
+}
+
+/// Dismiss on presses that hit no interactive child (dividers,
+/// padding, tag dots): pick the deepest widget under the press; if
+/// it is not inside a `GtkButton`, only the menus close and Finder
+/// state stays untouched. Button presses pass through (the SDK pops
+/// down after the action). This distinguishes "menu itself
+/// unselected" from presses on Finder content (outer gestures).
+fn attach_menu_background_dismiss(pop: &gtk::Popover) {
+  for button in [1u32, 3u32] {
+    let press = gtk::GestureClick::new();
+    press.set_button(button);
+    press.connect_pressed(|gesture, _, x, y| {
+      let on_button = gesture.widget().map_or(false, |root| {
+        let mut node = root.pick(x, y, gtk::PickFlags::DEFAULT);
+        while let Some(widget) = node {
+          if widget.clone().downcast::<gtk::Button>().is_ok() {
+            return true;
+          }
+          node = widget.parent();
+        }
+        false
+      });
+      if !on_button {
+        popdown_all_menus();
+      }
+    });
+    pop.add_controller(press);
   }
 }
 
@@ -373,6 +403,9 @@ fn file_menu_wrap(
     // before the SDK popup runs (capture beats bubble), so the
     // popup gets correct coordinates, grab and autohide. Guards on
     // both calls: double presses must neither warn nor misparent.
+    // Dead-area presses inside the open menu dismiss it (attached
+    // below); button presses pass through to their actions.
+    attach_menu_background_dismiss(&pop);
     if pop.parent().is_some() {
       pop.unparent();
     }

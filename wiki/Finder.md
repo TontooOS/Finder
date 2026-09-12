@@ -404,7 +404,11 @@ active state (`app_window_active` via `list_toplevels` plus
 `ApplicationWindow::is_active`); any flip in either direction
 dismisses all menus (`popdown_all_menus`) and logs
 `[finder][menu] window active changed -> {bool}`. The check is
-cheap and quiet (no log when unchanged).
+cheap and quiet (no log when unchanged). Presses on dead menu
+areas (dividers, padding, tag dots) dismiss only the menu:
+`attach_menu_background_dismiss` hit-tests with `pick` and lets
+button presses through to their actions, so menu-unselect and
+Finder presses stay distinguished.
 
 | Order | Entry |
 |---|---|
@@ -452,6 +456,18 @@ fn active_flipped(prev: Option<bool>, current: bool) -> bool
 True when a previous active state exists and differs from the
 current one (flip in either direction). Returns `false` on the
 first observation (`None`), so startup never dismisses menus.
+
+### `attach_menu_background_dismiss`
+
+```rust
+fn attach_menu_background_dismiss(pop: &gtk::Popover)
+```
+
+Dismisses the menu on presses that hit no interactive child
+(dividers, padding, tag dots): picks the deepest widget under the
+press and only pops down when it is not inside a `GtkButton`.
+Button presses pass through to their actions. Attached to every
+registered popover, so menu-unselect never touches Finder state.
 
 ## File context menu
 
