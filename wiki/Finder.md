@@ -88,13 +88,17 @@ grid live when the folder changes. An empty or unreadable directory shows a
 an icon file is missing the cell falls back to Tahoe CSS artwork
 (`.fd-tab` plus `.fd-body` in Finder blue `#7fbeec` with edge
 `#5ea3d8`), so the grid never renders an empty cell. Every cell is
-a fixed 112x112 square (`CELL`): 64px of artwork (`ARTWORK`) plus
-the label, identical in all four directions. Artwork always renders
-through `gtk::Picture` with `Contain` fit, so every source (192px
-app icons, large PNGs, 64px SVGs, cached photo previews) scales
-into the same 64x64 square instead of blowing up its cell. The
-`FlowBox` reflows its column count (4-8) dynamically when the window
-is resized in any direction. Static icons
+a fixed 112x112 square (`CELL`): artwork plus the label, identical
+in all four directions. Artwork always renders through
+`gtk::Picture` with `Contain` fit, so every source (192px app
+icons, large PNGs, 64px SVGs, cached photo previews) scales into
+its square instead of blowing up its cell (64px, `ARTWORK`; folders
+render at 72px, `FOLDER_ARTWORK`, because the folder glyph carries
+transparent padding while app icons are full-bleed). The `FlowBox`
+reflows its column count (4-8) dynamically when the window is
+resized in any direction. Idle context-menu popovers are hidden
+(`hide_idle_popover`), so the 180px menu content never drives the
+column width. Static icons
 (`folder.svg`, document icons, placeholders, cached previews) are
 decoded once per process into a shared `gdk4::Paintable`
 (`shared_paintable`); every cell gets a cheap

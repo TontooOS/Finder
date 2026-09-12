@@ -139,22 +139,31 @@ fn blue() -> Color {
   Color::from_rgb(0, 122, 255)
 }
 
-/// Fixed 64x64 artwork view for any icon file. `gtk::Picture` with
+fn fitted_picture(paintable: &gdk4::Paintable) -> gtk::Picture {
+  fitted_picture_sized(paintable, ARTWORK)
+}
+
+/// Fixed square artwork view for any icon file. `gtk::Picture` with
 /// `Contain` scales every source (192px app icons, large PNGs,
 /// 64px SVGs) into the same square, so all cells look identical.
 /// `can_shrink` is required, otherwise large sources would force
 /// their natural size onto the grid.
-fn fitted_picture(paintable: &gdk4::Paintable) -> gtk::Picture {
+fn fitted_picture_sized(paintable: &gdk4::Paintable, size: i32) -> gtk::Picture {
   let picture = gtk::Picture::for_paintable(paintable);
   picture.set_content_fit(gtk::ContentFit::Contain);
   picture.set_can_shrink(true);
-  picture.set_size_request(ARTWORK, ARTWORK);
+  picture.set_size_request(size, size);
   picture.set_halign(gtk::Align::Center);
   picture
 }
 
 /// Fixed artwork size (square) shared by every grid cell.
 const ARTWORK: i32 = 64;
+/// Folder artwork renders slightly larger: the folder glyph carries
+/// transparent padding (~58x46px of its 64px box) while app and
+/// document icons are full-bleed, so equal boxes made folders look
+/// smaller. 72px keeps visual parity and still fits the 112px cell.
+const FOLDER_ARTWORK: i32 = 72;
 /// Fixed square cell size: artwork plus two label lines fit inside,
 /// so every cell measures the same in all four directions.
 const CELL: i32 = 112;
@@ -164,13 +173,19 @@ const CELL: i32 = 112;
 /// every cell gets a cheap view scaled into the fixed 64x64 square
 /// instead of paying ~30ms of SVG rasterization per rebuild.
 fn icon_image(path: &std::path::Path) -> gtk::Picture {
+  icon_image_sized(path, ARTWORK)
+}
+
+/// Same as `icon_image` with an explicit square size (folders render
+/// slightly larger for visual parity, see `FOLDER_ARTWORK`).
+fn icon_image_sized(path: &std::path::Path, size: i32) -> gtk::Picture {
   match icons::shared_paintable(path) {
-    Some(paintable) => fitted_picture(&paintable),
+    Some(paintable) => fitted_picture_sized(&paintable, size),
     None => {
       let picture = gtk::Picture::for_filename(path);
       picture.set_content_fit(gtk::ContentFit::Contain);
       picture.set_can_shrink(true);
-      picture.set_size_request(ARTWORK, ARTWORK);
+      picture.set_size_request(size, size);
       picture.set_halign(gtk::Align::Center);
       picture
     }
@@ -184,10 +199,25 @@ fn folder_icon_art() -> gtk::Box {
     Some(path) => {
       let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
       holder.set_halign(gtk::Align::Center);
-      holder.append(&icon_image(&path));
+      holder.append(&icon_image_sized(&path, FOLDER_ARTWORK));
       holder
     }
     None => folder_art(),
+  }
+}
+
+/// Hide the idle popover inside a `ContextMenu` wrapper. The popup
+/// menu content carries `min-width: 180px`; left visible it drives
+/// the wrapped widget's minimum width (FlowBox columns grew to
+/// ~230px, showing 5 instead of 8). `popup()` re-shows it on
+/// right-click, so hiding only affects the idle state.
+fn hide_idle_popover(wrapper: &gtk::Widget) {
+  let mut cursor = wrapper.first_child();
+  while let Some(widget) = cursor {
+    cursor = widget.next_sibling();
+    if let Ok(pop) = widget.clone().downcast::<gtk::Popover>() {
+      pop.set_visible(false);
+    }
   }
 }
 
@@ -494,7 +524,9 @@ fn folder_cell(
     session,
     refresh,
   ));
-  menu.to_gtk()
+  let wrapped = menu.to_gtk();
+  hide_idle_popover(&wrapped);
+  wrapped
 }
 
 /// Inline rename field prefilled with the display name. Enter commits
@@ -831,6 +863,7 @@ impl Widget for FinderRoot {
     let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
       .entries(empty_space_menu(&session, &refresh));
     let menu_gtk = menu.to_gtk();
+    hide_idle_popover(&menu_gtk);
     menu_gtk.set_hexpand(true);
     menu_gtk.set_vexpand(true);
     detail.append(&menu_gtk);
@@ -975,6 +1008,13 @@ fn refresh_grid(  grid: &gtk::FlowBox,
     }
   }
   status.set_markup(&status_markup(&entries, pal));
+  // Column width driver check: FlowBox columns follow the widest
+  // child minimum. Expect ~CELL; ~230px means the idle popover (or
+  // another wrapper child) still drives the width.
+  if let Some(first) = grid.child_at_index(0) {
+    let (cmin, cnat, _, _) = first.measure(gtk::Orientation::Horizontal, -1);
+    eprintln!("[finder][refresh] first column min={cmin}px nat={cnat}px");
+  }
   eprintln!(
     "[finder][refresh] rebuilt {} cells in {}ms",
     entries.len(),
