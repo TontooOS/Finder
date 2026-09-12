@@ -6,6 +6,10 @@
 //! sidebar keeps CoreIcon SF Symbols because `SidebarIcon::file` relies
 //! on the `image` crate, which cannot decode SVG.
 
+use gdk4::prelude::PaintableExt;
+use glib::object::Cast;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Candidate directories holding the `Resources/` folder.
@@ -74,6 +78,54 @@ pub fn extension_icon(file: &str) -> Option<PathBuf> {
 /// without a specific document icon.
 pub fn generic_file_icon() -> Option<PathBuf> {
   extension_icon("basis.png")
+}
+
+/// Placeholder for photos that cannot be decoded
+/// (`Resources/extensionicons/image.png`).
+pub fn image_placeholder() -> Option<PathBuf> {
+  resources_file(&["extensionicons", "image.png"])
+}
+
+/// Placeholder for video files without a cached thumbnail
+/// (`Resources/extensionicons/video.png`).
+pub fn video_placeholder() -> Option<PathBuf> {
+  resources_file(&["extensionicons", "video.png"])
+}
+
+/// Icon files loaded once and shared by all grid cells (GTK main
+/// thread, hence thread-local: `Paintable` is not `Send`).
+thread_local! {
+  static SHARED_ICONS: RefCell<HashMap<PathBuf, gdk4::Paintable>> =
+    RefCell::new(HashMap::new());
+}
+
+/// Shared texture for an icon file, loaded once per process.
+/// Returns `None` when the file cannot be loaded (caller falls back
+/// to `GtkImage::from_file`).
+///
+/// Every cell used to decode its icon file again
+/// (`GtkImage::from_file`: ~30ms per folder cell for the SVG
+/// rasterizer), so a rebuild paid the cost once per entry. A
+/// `gtk::Widget` can only have one parent, but a `gdk4::Paintable`
+/// can be viewed by any number of `gtk::Image`s, so each file is
+/// loaded once into a shared texture and every cell gets a cheap
+/// `gtk::Image::from_paintable` view of it.
+pub fn shared_paintable(path: &Path) -> Option<gdk4::Paintable> {
+  SHARED_ICONS.with(|slot| {
+    if let Some(hit) = slot.borrow().get(path).cloned() {
+      return Some(hit);
+    }
+    let t0 = std::time::Instant::now();
+    let texture = gdk4::Texture::from_file(&gtk::gio::File::for_path(path)).ok()?;
+    let paintable: gdk4::Paintable = texture.upcast();
+    eprintln!(
+      "[finder][icons] loaded {} in {}ms (now shared)",
+      path.display(),
+      t0.elapsed().as_millis()
+    );
+    slot.borrow_mut().insert(path.to_path_buf(), paintable.clone());
+    Some(paintable)
+  })
 }
 
 /// Icon files inside a `.app` bundle, in lookup order (TBuild bundle
@@ -398,6 +450,40 @@ mod tests {
   #[test]
   fn missing_icon_returns_none() {
     assert!(icon_path("scalable", "does-not-exist-finder.svg").is_none());
+  }
+
+  #[test]
+  fn shared_paintable_loads_once_and_reuses() {
+    // Runs from the crate root in dev checkouts. Skipped silently
+    // when run from another layout.
+    if std::env::current_dir()
+      .map(|cwd| cwd.join("Resources/extensionicons/basis.png"))
+      .map(|path| path.is_file())
+      .unwrap_or(false)
+    {
+      let path = extension_icon("basis.png").expect("basis.png resolves");
+      let first = shared_paintable(&path);
+      let second = shared_paintable(&path);
+      assert!(first.is_some(), "shared texture must load");
+      assert!(second.is_some(), "shared texture must be reused");
+      let (a, b) = (first.unwrap(), second.unwrap());
+      assert_eq!(
+        (a.intrinsic_width(), a.intrinsic_height()),
+        (b.intrinsic_width(), b.intrinsic_height())
+      );
+    }
+  }
+
+  #[test]
+  fn placeholders_exist_in_dev_checkout() {
+    if std::env::current_dir()
+      .map(|cwd| cwd.join("Resources/extensionicons/image.png"))
+      .map(|path| path.is_file())
+      .unwrap_or(false)
+    {
+      assert!(image_placeholder().is_some());
+      assert!(video_placeholder().is_some());
+    }
   }
 
   #[test]

@@ -139,6 +139,20 @@ fn blue() -> Color {
   Color::from_rgb(0, 122, 255)
 }
 
+/// Light `GtkImage` viewing a shared icon texture. The file is
+/// decoded and rasterized once per process
+/// (`icons::shared_paintable`); every cell gets a cheap view instead
+/// of paying ~30ms of SVG rasterization per rebuild.
+fn icon_image(path: &std::path::Path) -> gtk::Image {
+  let image = match icons::shared_paintable(path) {
+    Some(paintable) => gtk::Image::from_paintable(Some(&paintable)),
+    None => gtk::Image::from_file(path),
+  };
+  image.set_pixel_size(64);
+  image.set_halign(gtk::Align::Center);
+  image
+}
+
 /// Default grid folder icon (`scalable/folder.svg`). Falls back to CSS
 /// artwork when the file is missing so the cell never renders empty.
 fn folder_icon_art() -> gtk::Box {
@@ -146,10 +160,7 @@ fn folder_icon_art() -> gtk::Box {
     Some(path) => {
       let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
       holder.set_halign(gtk::Align::Center);
-      let image = gtk::Image::from_file(&path);
-      image.set_pixel_size(64);
-      image.set_halign(gtk::Align::Center);
-      holder.append(&image);
+      holder.append(&icon_image(&path));
       holder
     }
     None => folder_art(),
@@ -192,25 +203,24 @@ fn folder_art() -> gtk::Box {
 fn preview_image(path: &std::path::Path) -> gtk::Box {
   let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
   holder.set_halign(gtk::Align::Center);
-  holder.append(&preview_art(path, false));
+  let image = icon_image(path);
+  image.set_size_request(64, 64);
+  holder.append(&image);
   holder
 }
 
-/// Grid artwork for one file: plain `GtkImage` for icons, or a
+/// Grid artwork for one file: shared icon texture for icons, or a
 /// rounded-corner texture for photos and video frames (GTK CSS
-/// `border-radius` does not clip image content). Falls back to the
-/// plain image when rounding fails (covers SVGs, which the `image`
-/// crate cannot decode).
+/// `border-radius` does not clip image content). Undecodable photos
+/// show the `image.png` placeholder instead of a broken image.
 fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
   if round {
     // Cheap path first: tiny cached PNG with corners already baked
     // in, no decode on the main thread. Falls through to in-memory
     // decoding only when the cache cannot be built.
     if let Some(cached) = icons::photo_preview(path) {
-      let image = gtk::Image::from_file(&cached);
-      image.set_pixel_size(64);
+      let image = icon_image(&cached);
       image.set_size_request(64, 64);
-      image.set_halign(gtk::Align::Center);
       return image.upcast();
     }
     let t0 = std::time::Instant::now();
@@ -241,11 +251,15 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
       preview.set_halign(gtk::Align::Center);
       return preview.upcast();
     }
+    // Undecodable photo: show the image placeholder, never a broken file.
+    if let Some(placeholder) = icons::image_placeholder() {
+      let fallback = icon_image(&placeholder);
+      fallback.set_size_request(64, 64);
+      return fallback.upcast();
+    }
   }
-  let image = gtk::Image::from_file(path);
-  image.set_pixel_size(64);
+  let image = icon_image(path);
   image.set_size_request(64, 64);
-  image.set_halign(gtk::Align::Center);
   image.upcast()
 }
 
@@ -405,7 +419,7 @@ fn folder_cell(
       model::FileKind::Image => cell.append(&rounded_preview(&full)),
       model::FileKind::Video => match icons::video_thumb(&full) {
         Some(thumb) => cell.append(&rounded_preview(&thumb)),
-        None => match icons::video_icon() {
+        None => match icons::video_placeholder().or_else(icons::video_icon) {
           Some(icon) => cell.append(&preview_image(&icon)),
           None => cell.append(&folder_art()),
         },

@@ -87,7 +87,12 @@ grid live when the folder changes. An empty or unreadable directory shows a
 `ContentUnavailableView` (`detail.empty`, `detail.empty.hint`). When
 an icon file is missing the cell falls back to Tahoe CSS artwork
 (`.fd-tab` plus `.fd-body` in Finder blue `#7fbeec` with edge
-`#5ea3d8`), so the grid never renders an empty cell.
+`#5ea3d8`), so the grid never renders an empty cell. Static icons
+(`folder.svg`, document icons, placeholders, cached previews) are
+decoded once per process into a shared `gdk4::Paintable`
+(`shared_paintable`); every cell gets a cheap
+`gtk::Image::from_paintable` view instead of paying ~30ms of SVG
+rasterization per entry per rebuild.
 
 `src/icons.rs` resolves `Resources/foldericons/<size>/<file>` across
 dev checkouts (`Resources/`), `.app` bundles and installed files
@@ -188,6 +193,39 @@ pub fn folder_icon(file: &str) -> Option<PathBuf>
 
 Resolves a `scalable/` icon file. Returns `None` when no layout holds
 the file.
+
+### `image_placeholder`
+
+```rust
+pub fn image_placeholder() -> Option<PathBuf>
+```
+
+Placeholder for photos that cannot be decoded
+(`Resources/extensionicons/image.png`). Shown instead of a broken
+image.
+
+### `video_placeholder`
+
+```rust
+pub fn video_placeholder() -> Option<PathBuf>
+```
+
+Placeholder for video files without a cached thumbnail
+(`Resources/extensionicons/video.png`). Falls back to the themed
+`blue-folder-videos.svg` when missing.
+
+### `shared_paintable`
+
+```rust
+pub fn shared_paintable(path: &Path) -> Option<gdk4::Paintable>
+```
+
+Shared texture for an icon file, decoded and rasterized once per
+process (thread-local cache on the GTK main thread). Every grid cell
+gets a cheap `gtk::Image::from_paintable` view of it instead of
+decoding the file again (~30ms per folder cell for the SVG
+rasterizer). Returns `None` when the file cannot be loaded (caller
+falls back to `GtkImage::from_file`).
 
 ### `video_thumb`
 
@@ -475,6 +513,7 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 | `[finder][refresh]` | `list_dir` time, cells slower than 20ms, total rebuild time |
 | `[finder][preview]` | Image decode time per photo (in-memory fallback) |
 | `[finder][photo]` | Preview cache generation time per photo (once) |
+| `[finder][icons]` | Icon file load time (once per file, then shared) |
 | `[finder][video]` | Frame extraction time per video |
 | `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
 | `[finder][ffmpeg]` | One-time `ffmpeg` probe time (result is cached) |
