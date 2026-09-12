@@ -44,6 +44,7 @@ type Refresh = Arc<dyn Fn() + Send + Sync>;
 /// Create a uniquely named folder (`Untitled Folder`, `Untitled
 /// Folder 2`, ...) and return its path.
 fn create_folder(base: &std::path::Path) -> Option<std::path::PathBuf> {
+  let t0 = std::time::Instant::now();
   let stem = lang::t("folder.untitled");
   let mut candidate = base.join(&stem);
   let mut counter = 2;
@@ -51,21 +52,45 @@ fn create_folder(base: &std::path::Path) -> Option<std::path::PathBuf> {
     candidate = base.join(format!("{stem} {counter}"));
     counter += 1;
   }
-  std::fs::create_dir(&candidate).ok()?;
+  let created = std::fs::create_dir(&candidate);
+  eprintln!(
+    "[finder][create_folder] create_dir {} ok={} in {}ms",
+    candidate.display(),
+    created.is_ok(),
+    t0.elapsed().as_millis()
+  );
+  created.ok()?;
   Some(candidate)
 }
 
 /// Commit an inline rename. Returns true on success (caller refreshes);
 /// on failure the session stays active so the name can be fixed.
 fn commit_rename(base: &std::path::Path, entry: &model::DirEntry, typed: &str) -> bool {
+  let t0 = std::time::Instant::now();
   let Some(new_name) = model::resolve_new_name(entry, typed) else {
+    eprintln!(
+      "[finder][commit_rename] rejected typed text {typed:?} for {}",
+      entry.name
+    );
     return false;
   };
   let target = base.join(&new_name);
   if target.exists() {
+    eprintln!(
+      "[finder][commit_rename] target exists: {}",
+      target.display()
+    );
     return false;
   }
-  std::fs::rename(base.join(&entry.name), &target).is_ok()
+  let ok = std::fs::rename(base.join(&entry.name), &target).is_ok();
+  eprintln!(
+    "[finder][commit_rename] {} -> {} ok={} in {}ms",
+    entry.name,
+    new_name,
+    ok,
+    t0.elapsed().as_millis()
+  );
+  ok
 }
 
 const SF_PRO: &str = "SF Pro Display";
@@ -178,7 +203,15 @@ fn preview_image(path: &std::path::Path) -> gtk::Box {
 /// crate cannot decode).
 fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
   if round {
-    if let Ok(img) = image::open(path) {
+    let t0 = std::time::Instant::now();
+    let decoded = image::open(path);
+    eprintln!(
+      "[finder][preview] decode {} ok={} in {}ms",
+      path.display(),
+      decoded.is_ok(),
+      t0.elapsed().as_millis()
+    );
+    if let Ok(img) = decoded {
       // Exact 64px backing: GtkImage pixel-size does not scale
       // paintables, so a larger texture would blow up the grid.
       let mut square = icons::cover_square(&img, 64);
@@ -255,9 +288,11 @@ pub(crate) fn file_menu_entries(
     ),
     MenuEntry::Item(
       MenuItem::new(lang::t("context.rename")).on_activate(move || {
+        eprintln!("[finder][rename] menu clicked for {}", rename_path.display());
         if let Ok(mut guard) = rename_session.lock() {
           *guard = Some(EditSession { path: rename_path.clone() });
         }
+        eprintln!("[finder][rename] session set, sending refresh signal");
         rename_refresh();
         println!("Finder rename");
       }),
@@ -463,6 +498,8 @@ fn edit_field(
   let commit_session2 = session.clone();
   let commit_refresh = refresh.clone();
   field.connect_activate(move |entry| {
+    eprintln!("[finder][rename] enter pressed, typed={:?}", entry.text());
+    let t0 = std::time::Instant::now();
     let disk = model::DirEntry {
       name: disk_name.clone(),
       is_dir,
@@ -480,6 +517,15 @@ fn edit_field(
         &commit_base,
         &commit_session2,
         &commit_refresh,
+      );
+      eprintln!(
+        "[finder][rename] commit + rebuild done in {}ms",
+        t0.elapsed().as_millis()
+      );
+    } else {
+      eprintln!(
+        "[finder][rename] commit failed after {}ms, field stays open",
+        t0.elapsed().as_millis()
       );
     }
   });
@@ -524,7 +570,9 @@ pub(crate) fn empty_space_menu(session: &SharedSession, refresh: &Refresh) -> Ve
   let new_refresh = refresh.clone();
   vec![
     MenuEntry::Item(MenuItem::new(lang::t("context.new_folder")).on_activate(move || {
+      eprintln!("[finder][new_folder] menu clicked");
       if let Some(path) = create_folder(&new_base) {
+        eprintln!("[finder][new_folder] session set for {}, sending refresh", path.display());
         if let Ok(mut guard) = new_session.lock() {
           *guard = Some(EditSession { path });
         }
@@ -776,12 +824,27 @@ impl Widget for FinderRoot {
       while refresh_rx.try_recv().is_ok() {
         menu_signaled = true;
       }
+      if !watch_signaled && !menu_signaled {
+        return glib::ControlFlow::Continue;
+      }
+      let editing = !watch_refresh_allowed(&session_tick);
+      eprintln!(
+        "[finder][tick] watch={watch_signaled} menu={menu_signaled} editing={editing}"
+      );
+      let t0 = std::time::Instant::now();
       if watch_refresh_allowed(&session_tick) {
         if watch_signaled || menu_signaled {
           let current = model::snapshot(&base);
           if current != last_snapshot {
+            eprintln!(
+              "[finder][tick] snapshot changed ({} entries), rebuilding",
+              current.len()
+            );
             last_snapshot = current;
             do_refresh();
+            eprintln!("[finder][tick] rebuild took {}ms", t0.elapsed().as_millis());
+          } else {
+            eprintln!("[finder][tick] snapshot identical, skip rebuild");
           }
         }
       } else if tick_should_rebuild(true, watch_signaled, menu_signaled) {
@@ -792,6 +855,12 @@ impl Widget for FinderRoot {
         // fires after the edit commits.
         last_snapshot = model::snapshot(&base);
         do_refresh();
+        eprintln!(
+          "[finder][tick] edit rebuild took {}ms",
+          t0.elapsed().as_millis()
+        );
+      } else {
+        eprintln!("[finder][tick] watcher burst dropped (editing)");
       }
       glib::ControlFlow::Continue
     });
@@ -843,16 +912,34 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   session: &SharedSession,
   refresh: &Refresh,
 ) {
+  let t0 = std::time::Instant::now();
   let mut child = grid.first_child();
   while let Some(widget) = child {
     child = widget.next_sibling();
     grid.remove(&widget);
   }
+  let t_list = std::time::Instant::now();
   let entries = model::list_dir(base);
+  eprintln!(
+    "[finder][refresh] list_dir {}: {} entries in {}ms",
+    base.display(),
+    entries.len(),
+    t_list.elapsed().as_millis()
+  );
   for entry in &entries {
+    let t_cell = std::time::Instant::now();
     grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status), -1);
+    let ms = t_cell.elapsed().as_millis();
+    if ms > 20 {
+      eprintln!("[finder][refresh] slow cell: {} ({}ms)", entry.name, ms);
+    }
   }
   status.set_markup(&status_markup(&entries, pal));
+  eprintln!(
+    "[finder][refresh] rebuilt {} cells in {}ms",
+    entries.len(),
+    t0.elapsed().as_millis()
+  );
 }
 
 #[cfg(test)]

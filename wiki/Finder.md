@@ -445,6 +445,31 @@ LANG=de_DE.UTF-8 cargo run
 The first command shows English strings (`Favourites`), the second
 German strings (`Favoriten`).
 
+## Debug logging
+
+Rename, New Folder, the 400ms tick, grid rebuilds and the icon
+pipeline log timing info to stderr with a `[finder]` prefix:
+
+| Prefix | Meaning |
+|---|---|
+| `[finder][rename]` | Menu click, Enter commit, commit result plus rebuild time |
+| `[finder][new_folder]` | Menu click, created folder, refresh signal |
+| `[finder][tick]` | Watcher/menu signals per tick, snapshot verdict, rebuild time |
+| `[finder][refresh]` | `list_dir` time, cells slower than 20ms, total rebuild time |
+| `[finder][preview]` | Image decode time per photo |
+| `[finder][video]` | Frame extraction time per video |
+| `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
+| `[finder][ffmpeg]` | One-time `ffmpeg` probe time (result is cached) |
+| `[finder][create_folder]` | Folder creation time |
+| `[finder][commit_rename]` | Rename validation plus filesystem time |
+
+Run with stderr visible to find the slow step, e.g. cells slower
+than 20ms or a multi-second `[finder][refresh] rebuilt ...` line:
+
+```bash
+cargo run 2> finder.log
+```
+
 ## Packaging
 
 `tontoo.proj` (`bundle_id: com.tontoo.finder`) lets TBuild assemble the

@@ -145,6 +145,7 @@ fn archive_icon_file(archive: &Path) -> Option<PathBuf> {
 /// is 3x the 64px grid size. Returns `None` when no icon is found or
 /// rendering fails (caller shows the default folder artwork).
 pub fn app_icon(entry: &Path) -> Option<PathBuf> {
+  let t0 = std::time::Instant::now();
   let meta = std::fs::metadata(entry).ok()?;
   let mtime = meta
     .modified()
@@ -158,6 +159,11 @@ pub fn app_icon(entry: &Path) -> Option<PathBuf> {
     .replace(['.', ' ', '-'], "_");
   let cached = std::env::temp_dir().join(format!("finder-appicon_{}_{}_{mtime}.png", stem, meta.len()));
   if cached.is_file() {
+    eprintln!(
+      "[finder][app_icon] cache hit {} in {}ms",
+      entry.display(),
+      t0.elapsed().as_millis()
+    );
     return Some(cached);
   }
   let raw = if entry.is_dir() {
@@ -171,6 +177,11 @@ pub fn app_icon(entry: &Path) -> Option<PathBuf> {
   let master = image::open(&cached).ok()?;
   let small = image::imageops::resize(&master, 192, 192, image::imageops::FilterType::Lanczos3);
   small.save(&cached).ok()?;
+  eprintln!(
+    "[finder][app_icon] rendered {} in {}ms",
+    entry.display(),
+    t0.elapsed().as_millis()
+  );
   Some(cached)
 }
 
@@ -214,29 +225,40 @@ pub fn thumb_key(source: &Path) -> Option<PathBuf> {
 /// every time froze the UI for seconds in video-heavy folders.
 pub fn ffmpeg_available() -> bool {
   static CACHED: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
-  *CACHED.get_or_init(|| {
-    std::process::Command::new("ffmpeg")
-      .arg("-version")
-      .output()
-      .map(|out| out.status.success())
-      .unwrap_or(false)
-  })
+  if let Some(hit) = CACHED.get() {
+    return *hit;
+  }
+  let t0 = std::time::Instant::now();
+  eprintln!("[finder][ffmpeg] probing ffmpeg (first call, result is cached)...");
+  let ok = std::process::Command::new("ffmpeg")
+    .arg("-version")
+    .output()
+    .map(|out| out.status.success())
+    .unwrap_or(false);
+  eprintln!(
+    "[finder][ffmpeg] probe took {}ms -> {ok}",
+    t0.elapsed().as_millis()
+  );
+  *CACHED.get_or_init(|| ok)
 }
 
 /// First-second frame of a video as a cached PNG. Returns a fresh
 /// extraction or the cached file. Returns `None` when `ffmpeg` is
 /// missing or extraction fails (caller shows the themed video icon).
 pub fn video_thumb(source: &Path) -> Option<PathBuf> {
+  let t0 = std::time::Instant::now();
   let cached = thumb_key(source)?;
   if cached.is_file() {
     return Some(cached);
   }
   if !ffmpeg_available() {
+    eprintln!("[finder][video] no ffmpeg, skip {}", source.display());
     return None;
   }
   if let Some(parent) = cached.parent() {
     let _ = std::fs::create_dir_all(parent);
   }
+  eprintln!("[finder][video] extracting frame for {}", source.display());
   let status = std::process::Command::new("ffmpeg")
     .args([
       "-y",
@@ -254,7 +276,13 @@ pub fn video_thumb(source: &Path) -> Option<PathBuf> {
     .arg(&cached)
     .status()
     .ok()?;
-  if status.success() && cached.is_file() {
+  let ok = status.success() && cached.is_file();
+  eprintln!(
+    "[finder][video] extraction for {} ok={ok} in {}ms",
+    source.display(),
+    t0.elapsed().as_millis()
+  );
+  if ok {
     Some(cached)
   } else {
     let _ = std::fs::remove_file(&cached);
