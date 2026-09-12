@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 # TontooOS SDK: frameworks via features (on-device: /Library/System/sdk).
 sdk = { path = "../../TontooLibs/SDK", features = ["TontooUI", "UIKit", "CoreIcon", "CoreData"] }
+launchpad-lib = { path = "../../TontooLibs/LaunchPad" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"

@@ -64,8 +64,9 @@ margins (16) and fixed column widths, so columns align:
 Single-click selection uses the native list selection styled like
 the grid (`.fd-row:selected`, blue fill plus white labels);
 right-clicking a row selects it first (capture gesture), then opens
-its file menu. Double-click (or Enter) on a folder opens it, see
-navigation in [Finder.md](Finder.md). The
+its file menu. Double-click (or Enter) on a folder opens it,
+`.app` bundles launch instead, see navigation in
+[Finder.md](Finder.md). The
 file menu hugs icon plus name (`file_menu_wrap`); the expanding
 gap and the date/size columns fall through to the empty-space
 menu. Each row carries the same per-file context menu as grid

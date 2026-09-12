@@ -63,12 +63,26 @@ described below.
 ## Navigation
 
 Double-click (or Enter) on a folder opens it in both views;
-single-click only selects (`activate-on-single-click` is off). `chevron.backward` and
+`.app` bundles launch through LaunchPad instead (separate
+process); single-click only selects (`activate-on-single-click` is
+off). `chevron.backward` and
 `chevron.forward` walk the back/forward history (empty stacks are
 a no-op). The title shows the current folder name, the status line
 its item count, and the `notify` watcher follows along
 (`rewatch`). An in-progress inline rename is cancelled on
-navigation. Opening files is a later step (logs for now).
+navigation. Opening plain files is a later step (logs for now).
+
+### `launch_app`
+
+```rust
+pub fn launch_app(path: &Path)
+```
+
+Asks the LaunchPad daemon to start a `.app` bundle as a separate
+process (`start_app`), on a throwaway thread so Finder never
+blocks. Success and failure only log (`[finder][launch]`);
+without a daemon (dev checkouts) it logs the error. Found in
+`src/launch.rs`.
 
 ## Search
 
@@ -512,7 +526,7 @@ empty-space menu above.
 
 | Order | Entry |
 |---|---|
-| 1 | `context.open` (Open, logs for now) |
+| 1 | `context.open` (Open: launches `.app` bundles via LaunchPad, other files log for now) |
 | 2 | `context.open_with` (Open With) with trailing `arrowtriangle.forward.fill`, no action |
 | 3 | Divider |
 | 4 | `context.move_to_trash` (Move to Trash, logs for now) |

@@ -7,6 +7,7 @@
 
 mod icons;
 mod lang;
+mod launch;
 mod model;
 mod prefs;
 mod views;

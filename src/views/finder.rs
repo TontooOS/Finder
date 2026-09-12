@@ -591,6 +591,7 @@ fn folder_title(base: &std::path::Path) -> String {
 struct ListedEntry {
   name: String,
   is_dir: bool,
+  is_app: bool,
 }
 
 /// Toolbar navigation request (Send-bound callbacks route through
@@ -623,8 +624,10 @@ fn after_navigate(nav: &NavState, session: &SharedSession, rebuild: &Rebuild) {
   rebuild();
 }
 
-/// Open the activated entry when it is still a directory. Guards
-/// with a live `is_dir` check in case the listing went stale.
+/// Open the activated entry: `.app` bundles launch through
+/// LaunchPad (separate process), directories navigate, plain files
+/// log for now. Guards with live checks in case the listing went
+/// stale.
 fn activate_index(
   nav: &NavState,
   listed: &Rc<RefCell<Vec<ListedEntry>>>,
@@ -632,18 +635,25 @@ fn activate_index(
   rebuild: &Rebuild,
   index: i32,
 ) {
-  let hit = listed
-    .borrow()
-    .get(index as usize)
-    .map(|entry| (entry.name.clone(), entry.is_dir));
-  let Some((name, was_dir)) = hit else {
+  let hit = listed.borrow().get(index as usize).map(|entry| {
+    (
+      entry.name.clone(),
+      entry.is_dir,
+      entry.is_app,
+    )
+  });
+  let Some((name, was_dir, was_app)) = hit else {
     return;
   };
+  let target = nav_current(nav).join(&name);
+  if was_app {
+    crate::launch::launch_app(&target);
+    return;
+  }
   if !was_dir {
     eprintln!("[finder][nav] open file (later step): {name}");
     return;
   }
-  let target = nav_current(nav).join(&name);
   if !target.is_dir() {
     return;
   }
@@ -945,6 +955,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     .map(|entry| ListedEntry {
       name: entry.name.clone(),
       is_dir: entry.is_dir,
+      is_app: entry.is_app,
     })
     .collect();
   let german = crate::lang::locale() == "de_de";
@@ -1150,13 +1161,19 @@ pub(crate) fn file_menu_entries(
   refresh: &Refresh,
 ) -> Vec<MenuEntry> {
   let name = model::display_name(&entry.name, entry.is_dir);
+  let open_path = base.join(&entry.name);
+  let open_is_app = entry.is_app;
   let rename_path = base.join(&entry.name);
   let rename_session = session.clone();
   let rename_refresh = refresh.clone();
   vec![
-    MenuEntry::Item(
-      MenuItem::new(lang::t("context.open")).on_activate(|| println!("Finder open")),
-    ),
+    MenuEntry::Item(MenuItem::new(lang::t("context.open")).on_activate(move || {
+      if open_is_app {
+        crate::launch::launch_app(&open_path);
+      } else {
+        println!("Finder open");
+      }
+    })),
     MenuEntry::Item(MenuItem::new(lang::t("context.open_with")).trailing_icon("arrowtriangle.forward.fill")),
     MenuEntry::Divider,
     MenuEntry::Item(
@@ -2134,6 +2151,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
     .map(|entry| ListedEntry {
       name: entry.name.clone(),
       is_dir: entry.is_dir,
+      is_app: entry.is_app,
     })
     .collect();
   eprintln!(

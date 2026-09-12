@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Launch `.app` bundles via LaunchPad (Open menu, double-click/Enter) as a separate process.
 - 2026-09-12: macOS-style grid selection (gray behind icon, blue tightly around label text).
 - 2026-09-12: Search field slides in/out with a revealer animation.
 - 2026-09-12: Search swaps run as idle callbacks (no toolbar mutation mid-emission, no `get_parent` criticals).
