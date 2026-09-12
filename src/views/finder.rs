@@ -139,18 +139,42 @@ fn blue() -> Color {
   Color::from_rgb(0, 122, 255)
 }
 
-/// Light `GtkImage` viewing a shared icon texture. The file is
-/// decoded and rasterized once per process
-/// (`icons::shared_paintable`); every cell gets a cheap view instead
-/// of paying ~30ms of SVG rasterization per rebuild.
-fn icon_image(path: &std::path::Path) -> gtk::Image {
-  let image = match icons::shared_paintable(path) {
-    Some(paintable) => gtk::Image::from_paintable(Some(&paintable)),
-    None => gtk::Image::from_file(path),
-  };
-  image.set_pixel_size(64);
-  image.set_halign(gtk::Align::Center);
-  image
+/// Fixed 64x64 artwork view for any icon file. `gtk::Picture` with
+/// `Contain` scales every source (192px app icons, large PNGs,
+/// 64px SVGs) into the same square, so all cells look identical.
+/// `can_shrink` is required, otherwise large sources would force
+/// their natural size onto the grid.
+fn fitted_picture(paintable: &gdk4::Paintable) -> gtk::Picture {
+  let picture = gtk::Picture::for_paintable(paintable);
+  picture.set_content_fit(gtk::ContentFit::Contain);
+  picture.set_can_shrink(true);
+  picture.set_size_request(ARTWORK, ARTWORK);
+  picture.set_halign(gtk::Align::Center);
+  picture
+}
+
+/// Fixed artwork size (square) shared by every grid cell.
+const ARTWORK: i32 = 64;
+/// Fixed square cell size: artwork plus two label lines fit inside,
+/// so every cell measures the same in all four directions.
+const CELL: i32 = 112;
+
+/// Light artwork viewing a shared icon texture. The file is decoded
+/// and rasterized once per process (`icons::shared_paintable`);
+/// every cell gets a cheap view scaled into the fixed 64x64 square
+/// instead of paying ~30ms of SVG rasterization per rebuild.
+fn icon_image(path: &std::path::Path) -> gtk::Picture {
+  match icons::shared_paintable(path) {
+    Some(paintable) => fitted_picture(&paintable),
+    None => {
+      let picture = gtk::Picture::for_filename(path);
+      picture.set_content_fit(gtk::ContentFit::Contain);
+      picture.set_can_shrink(true);
+      picture.set_size_request(ARTWORK, ARTWORK);
+      picture.set_halign(gtk::Align::Center);
+      picture
+    }
+  }
 }
 
 /// Default grid folder icon (`scalable/folder.svg`). Falls back to CSS
@@ -203,9 +227,7 @@ fn folder_art() -> gtk::Box {
 fn preview_image(path: &std::path::Path) -> gtk::Box {
   let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
   holder.set_halign(gtk::Align::Center);
-  let image = icon_image(path);
-  image.set_size_request(64, 64);
-  holder.append(&image);
+  holder.append(&icon_image(path));
   holder
 }
 
@@ -219,9 +241,7 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
     // in, no decode on the main thread. Falls through to in-memory
     // decoding only when the cache cannot be built.
     if let Some(cached) = icons::photo_preview(path) {
-      let image = icon_image(&cached);
-      image.set_size_request(64, 64);
-      return image.upcast();
+      return icon_image(&cached).upcast();
     }
     let t0 = std::time::Instant::now();
     let decoded = image::open(path);
@@ -232,9 +252,9 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
       t0.elapsed().as_millis()
     );
     if let Ok(img) = decoded {
-      // Exact 64px backing: GtkImage pixel-size does not scale
-      // paintables, so a larger texture would blow up the grid.
-      let mut square = icons::cover_square(&img, 64);
+      // Exact 64px backing: Picture scales any texture into the
+      // fixed square, so decoded pixels never blow up the grid.
+      let mut square = icons::cover_square(&img, ARTWORK as u32);
       icons::round_corners(&mut square, 10);
       let (w, h) = square.dimensions();
       let bytes = glib::Bytes::from(square.as_raw());
@@ -245,22 +265,14 @@ fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
         &bytes,
         (w * 4) as usize,
       );
-      let preview = gtk::Image::from_paintable(Some(&texture));
-      preview.set_pixel_size(64);
-      preview.set_size_request(64, 64);
-      preview.set_halign(gtk::Align::Center);
-      return preview.upcast();
+      return fitted_picture(&texture.upcast()).upcast();
     }
     // Undecodable photo: show the image placeholder, never a broken file.
     if let Some(placeholder) = icons::image_placeholder() {
-      let fallback = icon_image(&placeholder);
-      fallback.set_size_request(64, 64);
-      return fallback.upcast();
+      return icon_image(&placeholder).upcast();
     }
   }
-  let image = icon_image(path);
-  image.set_size_request(64, 64);
-  image.upcast()
+  icon_image(path).upcast()
 }
 
 /// Rounded photo/video preview in a centered holder box.
@@ -394,8 +406,12 @@ fn folder_cell(
   grid: &gtk::FlowBox,
   status: &gtk::Label,
 ) -> gtk::Widget {
+  // Fixed square cells: artwork (64) plus label always measure
+  // CELL x CELL, so the grid looks identical in all four
+  // directions. The FlowBox reflows the column count (4-8)
+  // dynamically when the window is resized in any direction.
   let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
-  cell.set_size_request(112, -1);
+  cell.set_size_request(CELL, CELL);
   cell.set_halign(gtk::Align::Center);
   cell.set_valign(gtk::Align::Start);
   cell.add_css_class("fd-cell");
