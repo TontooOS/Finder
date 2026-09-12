@@ -290,8 +290,60 @@ pub fn video_thumb(source: &Path) -> Option<PathBuf> {
   }
 }
 
+/// Directory caching small photo grid previews (one PNG per source).
+pub fn preview_dir() -> PathBuf {
+  std::env::temp_dir().join("finder-previews")
+}
+
+/// Cache path for a 64px photo preview. Keyed by size plus mtime
+/// like video thumbnails, so edited photos regenerate instead of
+/// serving a stale preview.
+pub fn preview_key(source: &Path) -> Option<PathBuf> {
+  let meta = std::fs::metadata(source).ok()?;
+  let mtime = meta
+    .modified()
+    .ok()?
+    .duration_since(std::time::UNIX_EPOCH)
+    .ok()?
+    .as_secs();
+  let stem = source
+    .file_stem()?
+    .to_str()?
+    .replace(['.', ' ', '-'], "_");
+  Some(preview_dir().join(format!("preview_{}_{}_{mtime}.png", stem, meta.len())))
+}
+
+/// Rounded 64px grid preview for a photo as a cached PNG file.
+/// Generates once on first view (decode plus aspect-fill crop plus
+/// corner mask), then serves the tiny file: decoding a 4K photo in
+/// debug builds blocked the main thread for seconds on every grid
+/// rebuild. Returns `None` when the source cannot be decoded (caller
+/// falls back to in-memory decoding or the themed icon).
+pub fn photo_preview(source: &Path) -> Option<PathBuf> {
+  let cached = preview_key(source)?;
+  if cached.is_file() {
+    return Some(cached);
+  }
+  let t0 = std::time::Instant::now();
+  let img = image::open(source).ok()?;
+  let mut square = cover_square(&img, 64);
+  round_corners(&mut square, 10);
+  if let Some(parent) = cached.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  image::DynamicImage::ImageRgba8(square).save(&cached).ok()?;
+  eprintln!(
+    "[finder][photo] generated preview for {} in {}ms",
+    source.display(),
+    t0.elapsed().as_millis()
+  );
+  Some(cached)
+}
+
 /// Aspect-fill resize plus center crop to an exact square (photo and
-/// video grid previews).
+/// video grid previews). Uses Triangle resampling: Lanczos3 on a
+/// multi-megapixel photo blocked the main thread for seconds, and at
+/// 64px thumbnails the difference is invisible.
 pub fn cover_square(img: &image::DynamicImage, size: u32) -> image::RgbaImage {
   let size = size.max(1);
   let (w, h) = (img.width().max(1), img.height().max(1));
@@ -300,7 +352,7 @@ pub fn cover_square(img: &image::DynamicImage, size: u32) -> image::RgbaImage {
     (w as f32 * scale).ceil() as u32,
     (h as f32 * scale).ceil() as u32,
   );
-  let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3);
+  let resized = img.resize_exact(nw, nh, image::imageops::FilterType::Triangle);
   let rgba = resized.to_rgba8();
   let (rw, rh) = (rgba.width(), rgba.height());
   let x = rw.saturating_sub(size) / 2;
@@ -513,6 +565,27 @@ mod tests {
     std::fs::create_dir_all(&bundle).unwrap();
     assert!(app_icon(&bundle).is_none());
     let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn photo_preview_caches_rounded_thumbnail() {
+    let base = std::env::temp_dir().join(format!("finder-test-photo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let file = base.join("shot fornitore.jpg");
+    write_test_png(&file);
+
+    let first = photo_preview(&file);
+    let second = photo_preview(&file);
+    assert!(first.is_some());
+    assert_eq!(first, second);
+    let rendered = first.unwrap();
+    assert!(rendered.is_file());
+    let img = image::open(&rendered).unwrap();
+    assert_eq!((img.width(), img.height()), (64, 64));
+
+    let _ = std::fs::remove_dir_all(&base);
+    let _ = std::fs::remove_file(&rendered);
   }
 
   #[test]

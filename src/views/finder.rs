@@ -203,6 +203,16 @@ fn preview_image(path: &std::path::Path) -> gtk::Box {
 /// crate cannot decode).
 fn preview_art(path: &std::path::Path, round: bool) -> gtk::Widget {
   if round {
+    // Cheap path first: tiny cached PNG with corners already baked
+    // in, no decode on the main thread. Falls through to in-memory
+    // decoding only when the cache cannot be built.
+    if let Some(cached) = icons::photo_preview(path) {
+      let image = gtk::Image::from_file(&cached);
+      image.set_pixel_size(64);
+      image.set_size_request(64, 64);
+      image.set_halign(gtk::Align::Center);
+      return image.upcast();
+    }
     let t0 = std::time::Instant::now();
     let decoded = image::open(path);
     eprintln!(

@@ -212,6 +212,21 @@ result is cached in a `OnceCell`: the grid calls this once per video
 per rebuild on the GTK main thread, and spawning `ffmpeg -version`
 every time froze the UI for seconds in video-heavy folders.
 
+### `photo_preview`
+
+```rust
+pub fn photo_preview(source: &Path) -> Option<PathBuf>
+```
+
+Rounded 64px grid preview for a photo as a cached PNG file in the
+temp dir (`finder-previews/`, keyed by size plus mtime). Generates
+once on first view (decode plus `cover_square` plus
+`round_corners`), then serves the tiny file, so full grid rebuilds
+stay fast even with multi-megapixel photos (decoding a 4K photo in
+debug builds blocked the main thread for seconds on every
+rebuild). Returns `None` when the source cannot be decoded (caller
+falls back to in-memory decoding or the themed icon).
+
 ### `cover_square`
 
 ```rust
@@ -219,7 +234,9 @@ pub fn cover_square(img: &DynamicImage, size: u32) -> RgbaImage
 ```
 
 Aspect-fill resize plus center crop to an exact square for photo and
-video previews.
+video previews. Uses Triangle resampling: Lanczos3 on a
+multi-megapixel photo blocked the main thread for seconds, and at
+64px thumbnails the difference is invisible.
 
 ### `round_corners`
 
@@ -456,7 +473,8 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 | `[finder][new_folder]` | Menu click, created folder, refresh signal |
 | `[finder][tick]` | Watcher/menu signals per tick, snapshot verdict, rebuild time |
 | `[finder][refresh]` | `list_dir` time, cells slower than 20ms, total rebuild time |
-| `[finder][preview]` | Image decode time per photo |
+| `[finder][preview]` | Image decode time per photo (in-memory fallback) |
+| `[finder][photo]` | Preview cache generation time per photo (once) |
 | `[finder][video]` | Frame extraction time per video |
 | `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
 | `[finder][ffmpeg]` | One-time `ffmpeg` probe time (result is cached) |
