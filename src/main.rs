@@ -8,6 +8,7 @@
 mod icons;
 mod lang;
 mod model;
+mod prefs;
 mod views;
 mod watch;
 

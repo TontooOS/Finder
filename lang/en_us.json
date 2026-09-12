@@ -37,5 +37,8 @@
   "detail.empty": "Downloads is empty",
   "detail.empty.hint": "Files you download appear here.",
   "status.line": "{count} items, {free} available",
-  "status.free": "1.06 TB"
+  "status.free": "1.06 TB",
+  "list.name": "Name",
+  "list.date": "Date Modified",
+  "list.size": "Size"
 }

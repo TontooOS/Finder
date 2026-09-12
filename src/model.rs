@@ -186,6 +186,76 @@ pub fn item_count(entries: &[DirEntry]) -> usize {
   entries.len()
 }
 
+/// Size plus mtime of one entry for the list view columns.
+pub struct FileMeta {
+  /// File size in bytes. Always 0 for directories (the list shows
+  /// no size for folders) and for unreadable entries.
+  pub len: u64,
+  /// Modification time as unix seconds (0 when unknown).
+  pub mtime_secs: u64,
+}
+
+/// Size plus mtime of one entry with a single metadata call.
+/// Missing or unreadable entries yield zeros.
+pub fn file_meta(base: &Path, name: &str) -> FileMeta {
+  let meta = std::fs::metadata(base.join(name)).ok();
+  match meta {
+    Some(m) => FileMeta {
+      len: if m.is_dir() { 0 } else { m.len() },
+      mtime_secs: m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0),
+    },
+    None => FileMeta { len: 0, mtime_secs: 0 },
+  }
+}
+
+/// Format decimals and strip trailing zeros (`9.53`, `10`, `1.2`).
+fn trim_float(value: f64, decimals: usize) -> String {
+  let text = format!("{value:.decimals$}");
+  let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+  if trimmed.is_empty() {
+    "0".to_string()
+  } else {
+    trimmed.to_string()
+  }
+}
+
+/// Human file size like the list view shows: `1 KB`, `23 KB`,
+/// `1.5 MB`, `9.53 GB`, `10 GB`. Kilobytes round up with a 1 KB
+/// minimum; larger units carry trimmed decimals.
+pub fn format_size(bytes: u64) -> String {
+  const KB: f64 = 1024.0;
+  const MB: f64 = 1024.0 * 1024.0;
+  const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+  let value = bytes as f64;
+  if value < MB {
+    format!("{} KB", (value / KB).ceil().max(1.0) as u64)
+  } else if value < GB {
+    format!("{} MB", trim_float(value / MB, 1))
+  } else {
+    format!("{} GB", trim_float(value / GB, 2))
+  }
+}
+
+/// Modification date like the list view shows (`12.09.2026 10:05`
+/// in German, `09/12/2026 10:05` in English, local timezone).
+/// Unknown times yield `--`.
+pub fn format_mtime(secs: u64, german: bool) -> String {
+  if secs == 0 {
+    return "--".to_string();
+  }
+  use chrono::TimeZone;
+  match chrono::Local.timestamp_opt(secs as i64, 0).single() {
+    Some(local) if german => local.format("%d.%m.%Y %H:%M").to_string(),
+    Some(local) => local.format("%m/%d/%Y %H:%M").to_string(),
+    None => "--".to_string(),
+  }
+}
+
 /// Cheap metadata snapshot of a directory for change detection.
 /// Used by the refresh tick: the watcher also fires on plain file
 /// opens/closes (notify watches `OPEN`), and every grid rebuild opens
@@ -392,6 +462,49 @@ mod tests {
     assert_ne!(snapshot(&base), first);
     std::fs::remove_file(base.join("b.txt")).unwrap();
     assert_eq!(snapshot(&base), first);
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn format_size_uses_trimmed_units() {
+    assert_eq!(format_size(0), "1 KB");
+    assert_eq!(format_size(512), "1 KB");
+    assert_eq!(format_size(1024), "1 KB");
+    assert_eq!(format_size(23 * 1024), "23 KB");
+    assert_eq!(format_size(1536 * 1024), "1.5 MB");
+    assert_eq!(format_size(1258291), "1.2 MB");
+    assert_eq!(format_size(10 * 1024 * 1024 * 1024), "10 GB");
+    assert_eq!(format_size(10233714893), "9.53 GB");
+  }
+
+  #[test]
+  fn format_mtime_locale_shapes() {
+    assert_eq!(format_mtime(0, true), "--");
+    assert_eq!(format_mtime(0, false), "--");
+    // Fixed shape in both locales (exact wall time is tz-dependent).
+    let german = format_mtime(1789026305, true);
+    assert_eq!(german.len(), 16);
+    assert_eq!(&german[2..3], ".");
+    let english = format_mtime(1789026305, false);
+    assert_eq!(english.len(), 16);
+    assert_eq!(&english[2..3], "/");
+  }
+
+  #[test]
+  fn file_meta_reports_len_and_dir_blank() {
+    let base = std::env::temp_dir().join(format!("finder-test-meta-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("sub")).unwrap();
+    std::fs::write(base.join("data.bin"), vec![7u8; 3000]).unwrap();
+
+    let file = file_meta(&base, "data.bin");
+    assert_eq!(file.len, 3000);
+    assert!(file.mtime_secs > 0);
+    let dir = file_meta(&base, "sub");
+    assert_eq!(dir.len, 0);
+    let missing = file_meta(&base, "nope.txt");
+    assert_eq!((missing.len, missing.mtime_secs), (0, 0));
 
     let _ = std::fs::remove_dir_all(&base);
   }

@@ -53,11 +53,11 @@ Three `TontooUI::Toolbar` groups in a `gtk::Box` row:
 | Group | Items |
 |---|---|
 | Navigation | `chevron.backward` (back), `chevron.forward` (forward) |
-| View switch | `square.grid.2x2` (icons), `list.bullet` (list), no actions yet |
+| View switch | `square.grid.2x2` (icons), `list.bullet` (list), with select indicator, see [ListView.md](ListView.md) |
 | Actions | `square.and.arrow.up` (share), `magnifyingglass` (search) |
 
-All buttons currently log their action; view switching and search
-filtering are later steps.
+The share and search buttons currently log their action; search
+filtering is a later step.
 
 ## Downloads grid
 
@@ -528,6 +528,7 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 | `[finder][preview]` | Image decode time per photo (in-memory fallback) |
 | `[finder][photo]` | Preview cache generation time per photo (once) |
 | `[finder][icons]` | Icon file load time (once per file, then shared) |
+| `[finder][view]` | View button clicks, mode switches and toolbar button count |
 | `[finder][video]` | Frame extraction time per video |
 | `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
 | `[finder][ffmpeg]` | One-time `ffmpeg` probe time (result is cached) |

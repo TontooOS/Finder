@@ -11,6 +11,7 @@
 use crate::icons;
 use crate::lang;
 use crate::model;
+use crate::prefs;
 use crate::TontooUI::{
   ContentUnavailableView, ContextMenu, MenuEntry, MenuItem, Sidebar, SidebarIcon, Toolbar,
   ToolbarItem,
@@ -19,6 +20,7 @@ use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
 use gtk::prelude::*;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 thread_local! {
@@ -220,6 +222,370 @@ fn hide_idle_popover(wrapper: &gtk::Widget) {
       pop.set_visible(false);
     }
   }
+}
+
+/// Small type icon at the far left of a list row.
+const LIST_ICON: i32 = 20;
+/// Fixed width of the modified-date column (header and rows share it).
+const DATE_WIDTH: i32 = 150;
+/// Fixed width of the size column (header and rows share it).
+const SIZE_WIDTH: i32 = 110;
+
+/// The two view buttons in toolbar order (grid, list). A `Toolbar`
+/// renders root[title-area, bar] with one glass group holding one
+/// `GtkButton` per item; this collects those buttons so the active
+/// view can carry a select indicator.
+fn collect_view_buttons(toolbar: &gtk::Widget) -> Vec<gtk::Button> {
+  fn push_buttons(node: &gtk::Widget, out: &mut Vec<gtk::Button>) {
+    let mut cursor = node.first_child();
+    while let Some(widget) = cursor {
+      cursor = widget.next_sibling();
+      if let Ok(btn) = widget.clone().downcast::<gtk::Button>() {
+        out.push(btn);
+      } else {
+        push_buttons(&widget, out);
+      }
+    }
+  }
+  let mut buttons = Vec::new();
+  push_buttons(toolbar, &mut buttons);
+  eprintln!("[finder][view] found {} toolbar buttons", buttons.len());
+  buttons
+}
+
+/// Select indicator on the active view button (grid first, list
+/// second), mirroring the sidebar selection.
+fn apply_view_indicator(buttons: &[gtk::Button], mode: prefs::ViewMode) {
+  for (index, btn) in buttons.iter().enumerate() {
+    let active = (index == 0) == (mode == prefs::ViewMode::Grid);
+    if active {
+      btn.add_css_class("fd-view-on");
+    } else {
+      btn.remove_css_class("fd-view-on");
+    }
+  }
+}
+
+/// Shared handles for rebuilding either view.
+#[derive(Clone)]
+struct ViewCtx {
+  slot: gtk::Box,
+  grid: gtk::FlowBox,
+  grid_menu: gtk::Widget,
+  status: gtk::Label,
+  pal: Palette,
+  base: std::path::PathBuf,
+  session: SharedSession,
+  refresh: Refresh,
+  mode: Rc<RefCell<prefs::ViewMode>>,
+}
+
+/// Rebuild callback for the active view (main thread only).
+type Rebuild = Rc<dyn Fn()>;
+
+/// Placeholder for an empty or unreadable directory.
+fn empty_view() -> gtk::Widget {
+  let empty = ContentUnavailableView::new()
+    .title(lang::t("detail.empty"))
+    .message(lang::t("detail.empty.hint"));
+  let empty_gtk = empty.to_gtk();
+  empty_gtk.set_hexpand(true);
+  empty_gtk.set_vexpand(true);
+  empty_gtk
+}
+
+/// Rebuild the content area for the active view: icon grid or list.
+fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
+  let mut child = ctx.slot.first_child();
+  while let Some(widget) = child {
+    child = widget.next_sibling();
+    ctx.slot.remove(&widget);
+  }
+  match *ctx.mode.borrow() {
+    prefs::ViewMode::Grid => {
+      if model::list_dir(&ctx.base).is_empty() {
+        ctx.slot.append(&empty_view());
+        ctx
+          .status
+          .set_markup(&status_markup(&[], &ctx.pal));
+      } else {
+        refresh_grid(
+          &ctx.grid,
+          &ctx.status,
+          &ctx.pal,
+          &ctx.base,
+          &ctx.session,
+          &ctx.refresh,
+        );
+        ctx.slot.append(&ctx.grid_menu);
+      }
+    }
+    prefs::ViewMode::List => refresh_list(ctx, rebuild),
+  }
+}
+
+/// List header row: Name (expands) plus fixed Date Modified and Size
+/// columns. Spacing, margins and widths mirror the rows so columns
+/// align.
+fn list_header(pal: &Palette) -> gtk::Box {
+  let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  row.set_margin_start(16);
+  row.set_margin_end(16);
+  row.set_margin_top(4);
+  row.set_margin_bottom(4);
+  let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+  spacer.set_size_request(LIST_ICON, -1);
+  row.append(&spacer);
+  let name = markup_label(&lang::t("list.name"), 12, "bold", pal.secondary);
+  name.set_halign(gtk::Align::Start);
+  name.set_hexpand(true);
+  row.append(&name);
+  let date = markup_label(&lang::t("list.date"), 12, "bold", pal.secondary);
+  date.set_size_request(DATE_WIDTH, -1);
+  date.set_halign(gtk::Align::Center);
+  row.append(&date);
+  let size = markup_label(&lang::t("list.size"), 12, "bold", pal.secondary);
+  size.set_size_request(SIZE_WIDTH, -1);
+  size.set_halign(gtk::Align::End);
+  row.append(&size);
+  row
+}
+
+/// Small type icon at the far left of a list row. Photos and videos
+/// show their placeholder (never decoded thumbnails), matching the
+/// reference layout.
+fn row_icon(base: &std::path::Path, entry: &model::DirEntry) -> gtk::Widget {
+  if entry.is_app {
+    let full = base.join(&entry.name);
+    if let Some(icon) = icons::app_icon(&full) {
+      return icon_image_sized(&icon, LIST_ICON).upcast();
+    }
+  } else if entry.is_dir {
+    if let Some(folder) = icons::folder_icon("folder.svg") {
+      return icon_image_sized(&folder, LIST_ICON).upcast();
+    }
+  } else {
+    let icon = match model::file_kind(&entry.ext) {
+      model::FileKind::Image => icons::image_placeholder(),
+      model::FileKind::Video => icons::video_placeholder().or_else(icons::video_icon),
+      model::FileKind::Audio => icons::audio_icon(),
+      model::FileKind::Archive => icons::archive_icon(),
+      model::FileKind::Other => model::document_icon(&entry.ext)
+        .and_then(icons::extension_icon)
+        .or_else(icons::generic_file_icon),
+    };
+    if let Some(path) = icon {
+      return icon_image_sized(&path, LIST_ICON).upcast();
+    }
+  }
+  match icons::generic_file_icon() {
+    Some(path) => icon_image_sized(&path, LIST_ICON).upcast(),
+    None => {
+      let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+      gap.set_size_request(LIST_ICON, LIST_ICON);
+      gap.upcast()
+    }
+  }
+}
+
+/// Inline rename field for a list row. Enter commits (stays open on
+/// invalid names), Escape cancels; both rebuild the active view.
+fn list_edit_field(
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  initial: &str,
+  session: &SharedSession,
+  rebuild: &Rebuild,
+) -> gtk::Entry {
+  let field = gtk::Entry::new();
+  field.set_text(initial);
+  field.set_hexpand(true);
+  let css = format!(
+    ".fd-edit {{ font-family: '{}'; font-size: 12px; color: {}; }}",
+    SF_PRO, "#1d1d1d"
+  );
+  crate::UIKit::widget::apply_css(&field, &css);
+  field.add_css_class("fd-edit");
+  field.connect_realize(|entry| {
+    entry.grab_focus();
+    entry.select_region(0, -1);
+  });
+
+  let disk_name = entry.name.clone();
+  let is_dir = entry.is_dir;
+  let is_app = entry.is_app;
+  let ext = entry.ext.clone();
+  let commit_base = base.to_path_buf();
+  let commit_session = session.clone();
+  let commit_rebuild = rebuild.clone();
+  field.connect_activate(move |entry| {
+    let disk = model::DirEntry {
+      name: disk_name.clone(),
+      is_dir,
+      is_app,
+      ext: ext.clone(),
+    };
+    eprintln!(
+      "[finder][rename] enter pressed in list, typed={:?}",
+      entry.text()
+    );
+    if commit_rename(&commit_base, &disk, &entry.text()) {
+      if let Ok(mut guard) = commit_session.lock() {
+        *guard = None;
+      }
+      commit_rebuild();
+    }
+  });
+
+  let cancel_session = session.clone();
+  let cancel_rebuild = rebuild.clone();
+  let keys = gtk::EventControllerKey::new();
+  keys.connect_key_pressed(move |_, key, _, _| {
+    if key == gdk4::Key::Escape {
+      if let Ok(mut guard) = cancel_session.lock() {
+        *guard = None;
+      }
+      cancel_rebuild();
+      glib::Propagation::Stop
+    } else {
+      glib::Propagation::Proceed
+    }
+  });
+  field.add_controller(keys);
+
+  field
+}
+
+/// One list row: icon, name (or inline rename field), modified date,
+/// size. Folders show no size. Carries the per-file context menu.
+fn list_row(
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  pal: &Palette,
+  german: bool,
+  session: &SharedSession,
+  refresh: &Refresh,
+  rebuild: &Rebuild,
+) -> gtk::ListBoxRow {
+  let row = gtk::ListBoxRow::new();
+  row.add_css_class("fd-row");
+  let inner = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  inner.set_margin_start(16);
+  inner.set_margin_end(16);
+  inner.set_margin_top(2);
+  inner.set_margin_bottom(2);
+  inner.append(&row_icon(base, entry));
+
+  let shown = model::display_name(&entry.name, entry.is_dir);
+  let editing = session
+    .lock()
+    .ok()
+    .and_then(|guard| guard.clone())
+    .map(|edit| edit.path == base.join(&entry.name))
+    .unwrap_or(false);
+  if editing {
+    inner.append(&list_edit_field(base, entry, &shown, session, rebuild));
+  } else {
+    let label = markup_label(&shown, 13, "normal", pal.fg);
+    label.set_halign(gtk::Align::Start);
+    label.set_hexpand(true);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.add_css_class("fd-label");
+    inner.append(&label);
+  }
+
+  let meta = model::file_meta(base, &entry.name);
+  let date = markup_label(&model::format_mtime(meta.mtime_secs, german), 12, "normal", pal.secondary);
+  date.set_size_request(DATE_WIDTH, -1);
+  date.set_halign(gtk::Align::Center);
+  inner.append(&date);
+
+  let size_text = if entry.is_dir {
+    String::new()
+  } else {
+    model::format_size(meta.len)
+  };
+  let size = markup_label(&size_text, 12, "normal", pal.secondary);
+  size.set_size_request(SIZE_WIDTH, -1);
+  size.set_halign(gtk::Align::End);
+  inner.append(&size);
+
+  let menu = ContextMenu::new(GtkWrap::wrap(inner.clone())).entries(file_menu_entries(
+    base,
+    entry,
+    session,
+    refresh,
+  ));
+  let wrapped = menu.to_gtk();
+  hide_idle_popover(&wrapped);
+  row.set_child(Some(&wrapped));
+  row
+}
+
+/// Rebuild the list view: fixed header plus one row per entry.
+fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
+  let t0 = std::time::Instant::now();
+  let entries = model::list_dir(&ctx.base);
+  let german = crate::lang::locale() == "de_de";
+  if entries.is_empty() {
+    ctx.slot.append(&empty_view());
+  } else {
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content.set_hexpand(true);
+    content.set_vexpand(true);
+    content.append(&list_header(&ctx.pal));
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    crate::UIKit::widget::apply_css(
+      &list,
+      &format!(
+        ".finder-list {{ background-color: {}; }} \
+         .fd-row:selected {{ background-color: rgba(10,132,255,0.30); border-radius: 6px; }} \
+         .fd-row:selected label {{ color: #ffffff; }}",
+        ctx.pal.bg
+      ),
+    );
+    list.add_css_class("finder-list");
+    for entry in &entries {
+      list.append(&list_row(
+        &ctx.base,
+        entry,
+        &ctx.pal,
+        german,
+        &ctx.session,
+        &ctx.refresh,
+        rebuild,
+      ));
+    }
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_child(Some(&list));
+    scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
+    crate::UIKit::widget::apply_css(
+      &scroll,
+      &format!(".finder-scroll {{ background-color: {}; }}", ctx.pal.bg),
+    );
+    scroll.add_css_class("finder-scroll");
+    let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
+      .entries(empty_space_menu(&ctx.session, &ctx.refresh));
+    let menu_gtk = menu.to_gtk();
+    hide_idle_popover(&menu_gtk);
+    menu_gtk.set_hexpand(true);
+    menu_gtk.set_vexpand(true);
+    content.append(&menu_gtk);
+    ctx.slot.append(&content);
+  }
+  ctx
+    .status
+    .set_markup(&status_markup(&entries, &ctx.pal));
+  eprintln!(
+    "[finder][refresh] rebuilt {} list rows in {}ms",
+    entries.len(),
+    t0.elapsed().as_millis()
+  );
 }
 
 /// Static Tahoe-style folder artwork: tab plus body in Finder blue.
@@ -768,10 +1134,30 @@ impl Widget for FinderRoot {
     title.set_hexpand(true);
     toolbar_row.append(&title);
 
+    let mode_state: Rc<RefCell<prefs::ViewMode>> =
+      Rc::new(RefCell::new(prefs::load_view_mode()));
+    let (view_tx, view_rx) = std::sync::mpsc::channel::<prefs::ViewMode>();
+    let grid_tx = view_tx.clone();
+    let list_tx = view_tx.clone();
     let views = Toolbar::new()
-      .item(ToolbarItem::new("square.grid.2x2"))
-      .item(ToolbarItem::new("list.bullet"));
-    toolbar_row.append(&views.to_gtk());
+      .item(ToolbarItem::new("square.grid.2x2").on_click(move || {
+        eprintln!("[finder][view] grid button clicked");
+        let _ = grid_tx.send(prefs::ViewMode::Grid);
+      }))
+      .item(ToolbarItem::new("list.bullet").on_click(move || {
+        eprintln!("[finder][view] list button clicked");
+        let _ = list_tx.send(prefs::ViewMode::List);
+      }));
+    let views_gtk = views.to_gtk();
+    let view_buttons = collect_view_buttons(&views_gtk);
+    for btn in &view_buttons {
+      crate::UIKit::widget::apply_css(
+        btn,
+        ".fd-view-on { background-color: rgba(10,132,255,0.85); }",
+      );
+    }
+    apply_view_indicator(&view_buttons, *mode_state.borrow());
+    toolbar_row.append(&views_gtk);
 
     let actions = Toolbar::new()
       .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
@@ -781,7 +1167,6 @@ impl Widget for FinderRoot {
     detail.append(&toolbar_row);
 
     let base = model::downloads_dir();
-    let entries = model::list_downloads();
     let session: SharedSession = Arc::new(Mutex::new(None));
 
     let grid = gtk::FlowBox::new();
@@ -824,50 +1209,46 @@ impl Widget for FinderRoot {
     let refresh: Refresh = Arc::new(move || {
       let _ = refresh_tx.send(());
     });
-    let pal_c = pal;
-    let do_refresh = {
-      let grid_c = grid.clone();
-      let status_c = status_label.clone();
-      let base_c = base.clone();
-      let session_c = session.clone();
-      let refresh_c = refresh.clone();
-      move || {
-        refresh_grid(&grid_c, &status_c, &pal_c, &base_c, &session_c, &refresh_c);
-      }
-    };
-    refresh_grid(&grid, &status_label, &pal, &base, &session, &refresh);
+    // Content slot holding the grid or the list for the active view.
+    let content_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    content_slot.set_hexpand(true);
+    content_slot.set_vexpand(true);
 
-    let scroll = gtk::ScrolledWindow::new();
-    if entries.is_empty() {
-      let empty = ContentUnavailableView::new()
-        .title(lang::t("detail.empty"))
-        .message(lang::t("detail.empty.hint"));
-      let empty_gtk = empty.to_gtk();
-      empty_gtk.set_hexpand(true);
-      empty_gtk.set_vexpand(true);
-      scroll.set_child(Some(&empty_gtk));
-    } else {
-      scroll.set_child(Some(&grid));
-    }
-    scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
-    scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
-    scroll.set_hexpand(true);
-    scroll.set_vexpand(true);
+    // Grid scroll with the empty-space menu, built once and re-shown
+    // on every switch back to the grid.
+    let grid_scroll = gtk::ScrolledWindow::new();
+    grid_scroll.set_child(Some(&grid));
+    grid_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
+    grid_scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+    grid_scroll.set_hexpand(true);
+    grid_scroll.set_vexpand(true);
     crate::UIKit::widget::apply_css(
-      &scroll,
+      &grid_scroll,
       &format!(".finder-scroll {{ background-color: {}; }}", pal.bg),
     );
-    scroll.add_css_class("finder-scroll");
+    grid_scroll.add_css_class("finder-scroll");
+    let grid_menu = {
+      let wrapped = ContextMenu::new(GtkWrap::wrap(grid_scroll.clone()))
+        .entries(empty_space_menu(&session, &refresh))
+        .to_gtk();
+      hide_idle_popover(&wrapped);
+      wrapped.set_hexpand(true);
+      wrapped.set_vexpand(true);
+      wrapped
+    };
 
-    // Right-click on empty space shows the context menu; the inner
-    // cell menus claim the press first, so it stays hidden over files.
-    let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
-      .entries(empty_space_menu(&session, &refresh));
-    let menu_gtk = menu.to_gtk();
-    hide_idle_popover(&menu_gtk);
-    menu_gtk.set_hexpand(true);
-    menu_gtk.set_vexpand(true);
-    detail.append(&menu_gtk);
+    let ctx = ViewCtx {
+      slot: content_slot.clone(),
+      grid: grid.clone(),
+      grid_menu: grid_menu.clone(),
+      status: status_label.clone(),
+      pal,
+      base: base.clone(),
+      session: session.clone(),
+      refresh: refresh.clone(),
+      mode: mode_state.clone(),
+    };
+    detail.append(&content_slot);
 
     let status = gtk::Box::new(gtk::Orientation::Vertical, 0);
     status.set_margin_top(6);
@@ -875,18 +1256,37 @@ impl Widget for FinderRoot {
     status.append(&status_label);
     detail.append(&status);
 
-    // Live updates: the notify watcher and the menu/edit refresh
-    // signal share one 400ms main-thread tick that drains bursts and
-    // rebuilds the grid once per real change. The watcher also fires
-    // on plain file opens (every rebuild opens files), so a metadata
-    // snapshot gates the rebuild: without it the refresh retriggers
-    // itself and starves the UI.
+    // Live updates: the notify watcher, the menu/edit refresh
+    // signal and the view-switch signal share one 400ms main-thread
+    // tick that drains bursts and rebuilds the active view once per
+    // real change. The watcher also fires on plain file opens (every
+    // rebuild opens files), so a metadata snapshot gates the
+    // rebuild: without it the refresh retriggers itself and starves
+    // the UI.
     let watch_rx = crate::watch::watch_dir(&base).map(|(watcher, rx)| {
       FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
       rx
     });
     let session_tick = session.clone();
     let mut last_snapshot = model::snapshot(&base);
+    // Rebuilds the active view (main thread only). List rows embed
+    // a rebuild handle for rename commit/cancel; the handle is
+    // installed after creation (a self-reference cannot be built in
+    // a single step).
+    let rebuild_cell: Rc<RefCell<Option<Rebuild>>> = Rc::new(RefCell::new(None));
+    let rebuild_all: Rebuild = {
+      let cell_c = rebuild_cell.clone();
+      let ctx_c = ctx.clone();
+      Rc::new(move || {
+        if let Some(rebuild) = cell_c.borrow().as_ref().cloned() {
+          refresh_content(&ctx_c, &rebuild);
+        }
+      })
+    };
+    *rebuild_cell.borrow_mut() = Some(rebuild_all.clone());
+    refresh_content(&ctx, &rebuild_all);
+    let rebuild_tick = rebuild_all.clone();
+    let mode_tick = mode_state.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
       let mut watch_signaled = false;
       if let Some(rx) = &watch_rx {
@@ -898,7 +1298,24 @@ impl Widget for FinderRoot {
       while refresh_rx.try_recv().is_ok() {
         menu_signaled = true;
       }
-      if !watch_signaled && !menu_signaled {
+      let mut view_switch = None;
+      while let Ok(mode) = view_rx.try_recv() {
+        view_switch = Some(mode);
+      }
+      if !watch_signaled && !menu_signaled && view_switch.is_none() {
+        return glib::ControlFlow::Continue;
+      }
+      if let Some(mode) = view_switch {
+        if mode != *mode_tick.borrow() {
+          *mode_tick.borrow_mut() = mode;
+          prefs::save_view_mode(mode);
+          apply_view_indicator(&view_buttons, mode);
+          eprintln!("[finder][view] switched to {}", mode.as_str());
+        }
+        let current = model::snapshot(&base);
+        last_snapshot = current;
+        rebuild_tick();
+        eprintln!("[finder][view] rebuilt after switch");
         return glib::ControlFlow::Continue;
       }
       let editing = !watch_refresh_allowed(&session_tick);
@@ -915,7 +1332,7 @@ impl Widget for FinderRoot {
               current.len()
             );
             last_snapshot = current;
-            do_refresh();
+            rebuild_tick();
             eprintln!("[finder][tick] rebuild took {}ms", t0.elapsed().as_millis());
           } else {
             eprintln!("[finder][tick] snapshot identical, skip rebuild");
@@ -928,7 +1345,7 @@ impl Widget for FinderRoot {
         // still rebuild; the snapshot is synced so no stale rebuild
         // fires after the edit commits.
         last_snapshot = model::snapshot(&base);
-        do_refresh();
+        rebuild_tick();
         eprintln!(
           "[finder][tick] edit rebuild took {}ms",
           t0.elapsed().as_millis()

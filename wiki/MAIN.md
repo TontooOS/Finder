@@ -17,6 +17,7 @@ scheme and loads `en_us`/`de_de` strings from `lang/`.
 | Main index | [MAIN.md](MAIN.md) | This page |
 | Rules | [RULE.md](RULE.md) | Development and usage rules |
 | Finder | [Finder.md](Finder.md) | Sidebar layout, toolbar, folder grid, status line and localization |
+| ListView | [ListView.md](ListView.md) | List view with date/size columns, view switch with indicator, per-user CoreData persistence |
 
 ## Quick Start
 
@@ -33,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: List view with Name/Date/Size columns, toolbar view switch with select indicator, per-user CoreData persistence (`com.tontoo.finder`).
 - 2026-09-12: Padded all `extensionicons` to a square 192x192 canvas so every document icon renders at equal width and height.
 - 2026-09-12: Scaled the whole grid down 25% (84px cells, 48px artwork, 54px folders) with one shared `PREVIEW_SIZE`.
 - 2026-09-12: Hide idle menu popovers so columns fit 8 across, folders render at 72px for visual parity, and the column width is logged.

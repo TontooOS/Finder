@@ -37,5 +37,8 @@
   "detail.empty": "Downloads ist leer",
   "detail.empty.hint": "Heruntergeladene Dateien erscheinen hier.",
   "status.line": "{count} Objekte, {free} verfügbar",
-  "status.free": "1,06 TB"
+  "status.free": "1,06 TB",
+  "list.name": "Name",
+  "list.date": "Änderungsdatum",
+  "list.size": "Größe"
 }
