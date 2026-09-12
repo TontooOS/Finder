@@ -243,14 +243,42 @@ thread_local! {
 /// or selection that follows it.
 fn popdown_all_menus() {
   OPEN_MENUS.with(|slot| {
-    slot.borrow_mut().retain(|weak| {
+    let mut guard = slot.borrow_mut();
+    let mut live = 0;
+    let mut open = 0;
+    guard.retain(|weak| {
       if let Some(pop) = weak.upgrade() {
+        live += 1;
+        if pop.is_visible() {
+          open += 1;
+        }
         popdown_tree(&pop);
         true
       } else {
         false
       }
     });
+    // Toplevel census: an open menu is its own toplevel surface, so
+    // a stuck-but-dead menu shows up here even when its widgets are
+    // gone. Baseline is 1 (the main window).
+    let tops = gtk::Window::list_toplevels();
+    eprintln!(
+      "[finder][menu] popdown_all: registry_live={live} was_open={open} toplevels={}",
+      tops.len()
+    );
+    for top in &tops {
+      let title = top
+        .clone()
+        .downcast::<gtk::Window>()
+        .ok()
+        .and_then(|w| w.title().map(|s| s.to_string()));
+      eprintln!(
+        "[finder][menu]   top visible={} title={title:?} type={} name={}",
+        top.is_visible(),
+        top.type_().name(),
+        top.widget_name()
+      );
+    }
   });
 }
 
