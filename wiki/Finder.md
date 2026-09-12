@@ -406,7 +406,9 @@ macOS-style selection: gray rounded background behind the icon
 (`fd-art-sel`, scheme-aware) plus blue tightly around the label
 text with white letters (`fd-lbl-sel`, never a full-width bar).
 Walks the cell recursively (artwork and labels sit inside their
-menu wrappers).
+menu wrappers). Native `FlowBoxChild` selection backgrounds are
+neutralized (transparent), so only the icon gray and the tight
+label blue ever show.
 
 ## Empty-space context menu
 

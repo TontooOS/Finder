@@ -1841,8 +1841,9 @@ impl Widget for FinderRoot {
     crate::UIKit::widget::apply_css(
       &grid,
       &format!(
-        ".fd-art.fd-art-sel {{ background-color: {art_sel}; border-radius: 8px; padding: 3px; }} \
-         .fd-label.fd-lbl-sel {{ background-color: {lbl_sel}; color: #ffffff; \
+        ".finder-grid *:selected {{ background-color: transparent; outline: none; }} \
+         .finder-grid .fd-art.fd-art-sel {{ background-color: {art_sel}; border-radius: 8px; padding: 3px; }} \
+         .finder-grid .fd-label.fd-lbl-sel {{ background-color: {lbl_sel}; color: #ffffff; \
          border-radius: 4px; padding: 1px 4px; }}"
       ),
     );
