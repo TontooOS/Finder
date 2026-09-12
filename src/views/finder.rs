@@ -1658,6 +1658,15 @@ impl Widget for FinderRoot {
       );
     }
     search_entry.add_css_class("fd-search");
+    // Animated wrapper: slide the field in/out instead of popping.
+    // The entry lives in the revealer permanently (no reparenting
+    // of the field itself); only the revealer swaps with the
+    // button, after the slide-out finishes.
+    let search_revealer = gtk::Revealer::new();
+    search_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
+    search_revealer.set_transition_duration(200);
+    search_revealer.set_valign(gtk::Align::Center);
+    search_revealer.set_child(Some(&search_entry));
 
     let actions = Toolbar::new()
       .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
@@ -1690,26 +1699,51 @@ impl Widget for FinderRoot {
     let expand_search = {
       let group_c = actions_group.clone();
       let btn_c = actions_search_btn.clone();
+      let reveal_c = search_revealer.clone();
       let entry_c = search_entry.clone();
       let open_c = search_open.clone();
       move || {
         let group_c = group_c.clone();
         let btn_c = btn_c.clone();
+        let reveal_c = reveal_c.clone();
         let entry_c = entry_c.clone();
         let open_c = open_c.clone();
         glib::idle_add_local(move || {
           if !open_c.get() {
             entry_c.set_text(&search_query());
-            group_c.remove(&btn_c);
-            group_c.append(&entry_c);
+            // Button out (if still in), revealer in (if not yet):
+            // group and button live forever, so membership reads
+            // here are safe.
+            if btn_c.parent().is_some() {
+              group_c.remove(&btn_c);
+            }
+            if reveal_c.parent().is_none() {
+              group_c.append(&reveal_c);
+            }
+            reveal_c.set_reveal_child(true);
             entry_c.grab_focus();
             open_c.set(true);
             eprintln!("[finder][search] expanded");
           } else {
-            group_c.remove(&entry_c);
-            group_c.append(&btn_c);
+            reveal_c.set_reveal_child(false);
             open_c.set(false);
             eprintln!("[finder][search] collapsed");
+            // Swap back to the button after the slide-out.
+            let group_c2 = group_c.clone();
+            let btn_c2 = btn_c.clone();
+            let reveal_c2 = reveal_c.clone();
+            let open_c2 = open_c.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(220), move || {
+              if !open_c2.get() {
+                if reveal_c2.parent().is_some() {
+                  group_c2.remove(&reveal_c2);
+                }
+                if btn_c2.parent().is_none() {
+                  group_c2.append(&btn_c2);
+                }
+              }
+              glib::ControlFlow::Break
+            });
           }
           glib::ControlFlow::Break
         });
@@ -1719,19 +1753,33 @@ impl Widget for FinderRoot {
     let collapse_search: Rc<dyn Fn()> = Rc::new({
       let group_c = actions_group.clone();
       let btn_c = actions_search_btn.clone();
-      let entry_c = search_entry.clone();
+      let reveal_c = search_revealer.clone();
       let open_c = search_open.clone();
       move || {
         let group_c = group_c.clone();
         let btn_c = btn_c.clone();
-        let entry_c = entry_c.clone();
+        let reveal_c = reveal_c.clone();
         let open_c = open_c.clone();
         glib::idle_add_local(move || {
           if open_c.get() {
-            group_c.remove(&entry_c);
-            group_c.append(&btn_c);
+            reveal_c.set_reveal_child(false);
             open_c.set(false);
             eprintln!("[finder][search] collapsed");
+            let group_c2 = group_c.clone();
+            let btn_c2 = btn_c.clone();
+            let reveal_c2 = reveal_c.clone();
+            let open_c2 = open_c.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(220), move || {
+              if !open_c2.get() {
+                if reveal_c2.parent().is_some() {
+                  group_c2.remove(&reveal_c2);
+                }
+                if btn_c2.parent().is_none() {
+                  group_c2.append(&btn_c2);
+                }
+              }
+              glib::ControlFlow::Break
+            });
           }
           glib::ControlFlow::Break
         });
