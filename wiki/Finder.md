@@ -107,7 +107,10 @@ rasterization per entry per rebuild.
 
 `src/icons.rs` resolves `Resources/foldericons/<size>/<file>` across
 dev checkouts (`Resources/`), `.app` bundles and installed files
-(`/usr/share/finder/`). The sidebar keeps CoreIcon SF Symbols:
+(`/usr/share/finder/`). All files in
+`Resources/extensionicons/` sit on a square canvas (192x192,
+transparent padding), so `Contain` fit renders every document icon
+at the same width and height. The sidebar keeps CoreIcon SF Symbols:
 `SidebarIcon::file` relies on the `image` crate, which cannot decode
 SVG.
 
