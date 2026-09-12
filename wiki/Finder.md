@@ -380,9 +380,10 @@ Every wrapper popover registers in a thread-local list
 (`OPEN_MENUS`); any press inside the window (capture gestures on
 the root, both mouse buttons), selection changes, view switches
 and rebuilds dismiss all menus explicitly
-(`popdown_all_menus`), since GTK autohide does not reliably close
-these parented popovers. Presses inside an open menu never reach
-the window (separate popup surface), so menu use is unaffected.
+(`popdown_all_menus`). Idle popovers leave measurement via
+`set_child_visible(false)` (`prepare_menu_popover`), never via
+`set_visible`, which broke GTK's popover state machine (no grab,
+no autohide, stuck surfaces).
 Presses outside the window never reach these gestures either, so
 the 400ms main-thread tick also polls the application window
 active state (`app_window_active` via `list_toplevels` plus

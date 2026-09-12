@@ -200,23 +200,24 @@ fn folder_icon_art() -> gtk::Box {
   }
 }
 
-/// Hide the idle popover inside a `ContextMenu` wrapper. The popup
-/// menu content carries `min-width: 180px`; left visible it drives
-/// the wrapped widget's minimum width (FlowBox columns grew to
-/// ~230px, showing 5 instead of 8). `popup()` re-shows it on
-/// right-click, so hiding only affects the idle state.
-///
-/// Every wrapper popover is also registered below so selection
-/// changes and rebuilds can dismiss menus explicitly (GTK autohide
-/// does not reliably close these parented popovers; rebuilds used
-/// to destroy them as a side effect, which the snapshot gate
-/// stopped).
-fn hide_idle_popover(wrapper: &gtk::Widget) {
+/// Prepare the idle popover inside a `ContextMenu` wrapper. The popup
+/// menu content carries `min-width: 180px`; if the popover takes part
+/// in measuring, it drives the wrapped widget's minimum width
+/// (FlowBox columns grew to ~230px, showing 5 instead of 8).
+/// `set_child_visible(false)` removes it from measurement while
+/// keeping it fully presentable: unlike `set_visible(false)` (which
+/// broke GTK's popover state machine: no grab, no autohide, and
+/// `popdown()` no longer removing the surface), the popover still
+/// grabs on `popup()`, autohide dismisses on outside clicks, and
+/// `popdown()` works. Every wrapper popover is also registered
+/// below so selection changes and rebuilds can dismiss menus
+/// explicitly.
+fn prepare_menu_popover(wrapper: &gtk::Widget) {
   let mut cursor = wrapper.first_child();
   while let Some(widget) = cursor {
     cursor = widget.next_sibling();
     if let Ok(pop) = widget.clone().downcast::<gtk::Popover>() {
-      pop.set_visible(false);
+      pop.set_child_visible(false);
       OPEN_MENUS.with(|slot| slot.borrow_mut().push(pop.downgrade()));
     }
   }
@@ -354,7 +355,7 @@ fn file_menu_wrap(
     refresh,
   ));
   let wrapped = menu.to_gtk();
-  hide_idle_popover(&wrapped);
+  prepare_menu_popover(&wrapped);
   wrapped
 }
 
@@ -726,7 +727,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
       .entries(empty_space_menu(&ctx.session, &ctx.refresh));
     let menu_gtk = menu.to_gtk();
-    hide_idle_popover(&menu_gtk);
+    prepare_menu_popover(&menu_gtk);
     menu_gtk.set_hexpand(true);
     menu_gtk.set_vexpand(true);
     content.append(&menu_gtk);
@@ -1417,7 +1418,7 @@ impl Widget for FinderRoot {
       let wrapped = ContextMenu::new(GtkWrap::wrap(grid_scroll.clone()))
         .entries(empty_space_menu(&session, &refresh))
         .to_gtk();
-      hide_idle_popover(&wrapped);
+      prepare_menu_popover(&wrapped);
       wrapped.set_hexpand(true);
       wrapped.set_vexpand(true);
       wrapped
