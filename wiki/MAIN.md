@@ -33,4 +33,5 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Fixed Rename/New Folder UI freeze (tick drops watcher bursts while editing, cached `ffmpeg` check, `refresh_grid` lists `base`).
 - 2026-09-09: Initial Finder basis (TontooUI Sidebar + toolbar + folder grid + status line, `lang/en_us.json` and `lang/de_de.json`).

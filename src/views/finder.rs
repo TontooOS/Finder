@@ -766,28 +766,32 @@ impl Widget for FinderRoot {
     let session_tick = session.clone();
     let mut last_snapshot = model::snapshot(&base);
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
-      let mut signaled = false;
+      let mut watch_signaled = false;
       if let Some(rx) = &watch_rx {
         while rx.try_recv().is_ok() {
-          signaled = true;
+          watch_signaled = true;
         }
       }
+      let mut menu_signaled = false;
       while refresh_rx.try_recv().is_ok() {
-        signaled = true;
+        menu_signaled = true;
       }
-      if signaled {
-        if watch_refresh_allowed(&session_tick) {
+      if watch_refresh_allowed(&session_tick) {
+        if watch_signaled || menu_signaled {
           let current = model::snapshot(&base);
           if current != last_snapshot {
             last_snapshot = current;
             do_refresh();
           }
-        } else {
-          // Drop watcher bursts during inline rename; the edit
-          // commit refreshes explicitly. Menu signals still rebuild:
-          // their filesystem change lands in the snapshot.
-          do_refresh();
         }
+      } else if tick_should_rebuild(true, watch_signaled, menu_signaled) {
+        // Inline rename open: drop watcher bursts (every rebuild opens
+        // files, which the watcher reports, which would rebuild again
+        // every 400ms and steal focus). Explicit menu/edit signals
+        // still rebuild; the snapshot is synced so no stale rebuild
+        // fires after the edit commits.
+        last_snapshot = model::snapshot(&base);
+        do_refresh();
       }
       glib::ControlFlow::Continue
     });
@@ -817,6 +821,20 @@ fn watch_refresh_allowed(session: &SharedSession) -> bool {
   session.lock().map(|guard| guard.is_none()).unwrap_or(false)
 }
 
+/// Whether this tick rebuilds the grid. While an inline rename is
+/// open (`editing`), only explicit menu/edit signals rebuild;
+/// watcher bursts are dropped (each rebuild opens files, which the
+/// watcher reports, which would otherwise rebuild every tick and
+/// steal focus). Outside edits, either signal rebuilds (gated by
+/// the snapshot diff at the call site).
+fn tick_should_rebuild(editing: bool, watch_signaled: bool, menu_signaled: bool) -> bool {
+  if editing {
+    menu_signaled
+  } else {
+    watch_signaled || menu_signaled
+  }
+}
+
 /// Rebuild the grid and status line from the live directory.
 fn refresh_grid(  grid: &gtk::FlowBox,
   status: &gtk::Label,
@@ -830,7 +848,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
     child = widget.next_sibling();
     grid.remove(&widget);
   }
-  let entries = model::list_downloads();
+  let entries = model::list_dir(base);
   for entry in &entries {
     grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status), -1);
   }
@@ -921,5 +939,19 @@ mod tests {
       path: std::path::PathBuf::from("/tmp/x"),
     });
     assert!(!watch_refresh_allowed(&session));
+  }
+
+  #[test]
+  fn tick_rebuild_signal_matrix() {
+    // Idle: either signal rebuilds (snapshot gate at call site).
+    assert!(tick_should_rebuild(false, true, false));
+    assert!(tick_should_rebuild(false, false, true));
+    assert!(tick_should_rebuild(false, true, true));
+    assert!(!tick_should_rebuild(false, false, false));
+    // Editing: watcher bursts dropped, menu signals rebuild.
+    assert!(!tick_should_rebuild(true, true, false));
+    assert!(tick_should_rebuild(true, false, true));
+    assert!(tick_should_rebuild(true, true, true));
+    assert!(!tick_should_rebuild(true, false, false));
   }
 }

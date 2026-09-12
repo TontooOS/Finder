@@ -208,12 +208,19 @@ pub fn thumb_key(source: &Path) -> Option<PathBuf> {
 }
 
 /// True when `ffmpeg` is on PATH and can extract video frames.
+///
+/// The process spawn is cached: the grid calls this once per video
+/// per rebuild on the GTK main thread, so spawning `ffmpeg -version`
+/// every time froze the UI for seconds in video-heavy folders.
 pub fn ffmpeg_available() -> bool {
-  std::process::Command::new("ffmpeg")
-    .arg("-version")
-    .output()
-    .map(|out| out.status.success())
-    .unwrap_or(false)
+  static CACHED: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
+  *CACHED.get_or_init(|| {
+    std::process::Command::new("ffmpeg")
+      .arg("-version")
+      .output()
+      .map(|out| out.status.success())
+      .unwrap_or(false)
+  })
 }
 
 /// First-second frame of a video as a cached PNG. Returns a fresh
@@ -377,6 +384,13 @@ mod tests {
     std::fs::write(&file, b"x").unwrap();
     assert!(video_thumb(&file).is_none());
     let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn ffmpeg_available_is_cached_and_consistent() {
+    // Must not spawn a process per call (grid calls it per video per
+    // rebuild on the main thread); repeated calls agree.
+    assert_eq!(ffmpeg_available(), ffmpeg_available());
   }
 
   fn write_test_png(path: &Path) {

@@ -201,6 +201,17 @@ Returns `None` when `ffmpeg` is missing or extraction fails (caller
 shows the themed video icon). Audio files resolve
 `Resources/extensionicons/audio.png` via `audio_icon()`.
 
+### `ffmpeg_available`
+
+```rust
+pub fn ffmpeg_available() -> bool
+```
+
+True when `ffmpeg` is on PATH and can extract video frames. The
+result is cached in a `OnceCell`: the grid calls this once per video
+per rebuild on the GTK main thread, and spawning `ffmpeg -version`
+every time froze the UI for seconds in video-heavy folders.
+
 ### `cover_square`
 
 ```rust
@@ -229,9 +240,28 @@ pub fn watch_dir(path: &Path) -> Option<(RecommendedWatcher, Receiver<()>)>
 Watches a directory (non-recursive) with `notify` and signals per
 file system event. The UI drains the channel on a 400ms main-thread
 tick and rebuilds the grid once per burst, so the Finder view stays
-in sync with the folder. Watcher rebuilds pause while an inline
-rename is open (`watch_refresh_allowed`); menu and edit signals
-always rebuild. Returns `None` when watching fails.
+in sync with the folder. The tick tracks watcher and menu/edit
+signals separately (`tick_should_rebuild`): while an inline rename is
+open, watcher bursts are dropped and only explicit menu/edit signals
+rebuild, with the snapshot synced so no stale rebuild fires after the
+edit commits. Returns `None` when watching fails.
+
+### `tick_should_rebuild`
+
+```rust
+fn tick_should_rebuild(editing: bool, watch_signaled: bool, menu_signaled: bool) -> bool
+```
+
+Whether the 400ms tick rebuilds the grid. While an inline rename is
+open (`editing`), only explicit menu/edit signals rebuild; watcher
+bursts are dropped, because every rebuild opens files (image decodes,
+icon cache checks), the watcher reports those opens, and rebuilding
+on them would loop every 400ms, steal focus and freeze the UI. When
+idle, either signal rebuilds (still gated by the `snapshot` diff at
+the call site).
+
+- Returns `menu_signaled` when `editing` is true.
+- Returns `watch_signaled || menu_signaled` otherwise.
 
 ### `snapshot`
 
@@ -244,6 +274,16 @@ change detection. The watcher also fires on plain file opens, and
 every grid rebuild opens files (image decodes, icon cache checks):
 rebuilding on those would retrigger itself forever and starve the
 main thread, so the tick only rebuilds when this snapshot differs.
+
+### `refresh_grid`
+
+```rust
+fn refresh_grid(grid: &FlowBox, status: &Label, pal: &Palette, base: &Path, session: &SharedSession, refresh: &Refresh)
+```
+
+Clears the grid and rebuilds it from `list_dir(base)` plus the status
+line. Always lists `base` (never a hardcoded folder), so the shown
+entries match the watched directory.
 
 ## Empty-space context menu
 
