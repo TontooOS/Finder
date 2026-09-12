@@ -60,6 +60,16 @@ Three `TontooUI::Toolbar` groups in a `gtk::Box` row:
 The share and search buttons currently log their action; search
 filtering is a later step.
 
+## Navigation
+
+Double-click (or Enter) on a folder opens it in both views;
+single-click only selects. `chevron.backward` and
+`chevron.forward` walk the back/forward history (empty stacks are
+a no-op). The title shows the current folder name, the status line
+its item count, and the `notify` watcher follows along
+(`rewatch`). An in-progress inline rename is cancelled on
+navigation. Opening files is a later step (logs for now).
+
 ## Downloads grid
 
 A `gtk::FlowBox` (4-8 columns, homogeneous) shows the live entries of
@@ -601,6 +611,7 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 | `[finder][icons]` | Icon file load time (once per file, then shared) |
 | `[finder][menu]` | Menu dismissals, toplevel census, window active flips |
 | `[finder][view]` | View button clicks, mode switches and toolbar button count |
+| `[finder][nav]` | Navigation button clicks, opened folders and file-open notes |
 | `[finder][video]` | Frame extraction time per video |
 | `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
 | `[finder][ffmpeg]` | One-time `ffmpeg` probe time (result is cached) |

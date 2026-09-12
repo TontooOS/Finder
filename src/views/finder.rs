@@ -406,10 +406,12 @@ fn apply_view_indicator(buttons: &[gtk::Button], mode: prefs::ViewMode) {
 struct ViewCtx {
   slot: gtk::Box,
   grid: gtk::FlowBox,
-  grid_menu: gtk::Widget,
+  grid_scroll: gtk::ScrolledWindow,
   status: gtk::Label,
+  title: gtk::Label,
   pal: Palette,
-  base: std::path::PathBuf,
+  nav: NavState,
+  listed: Rc<RefCell<Vec<ListedEntry>>>,
   session: SharedSession,
   refresh: Refresh,
   mode: Rc<RefCell<prefs::ViewMode>>,
@@ -417,6 +419,139 @@ struct ViewCtx {
 
 /// Rebuild callback for the active view (main thread only).
 type Rebuild = Rc<dyn Fn()>;
+
+/// Navigation stacks: current folder plus back/forward history.
+/// Pure data (no widgets), so history moves are unit-testable; the
+/// watcher, snapshot and rebuild happen in `after_navigate`.
+#[derive(Debug, Default)]
+struct NavStacks {
+  current: std::path::PathBuf,
+  back: Vec<std::path::PathBuf>,
+  forward: Vec<std::path::PathBuf>,
+}
+
+/// Fresh navigation (double-clicked folder): push current to back,
+/// clear forward. Returns false when already there.
+fn nav_to(stacks: &mut NavStacks, target: std::path::PathBuf) -> bool {
+  if stacks.current == target {
+    return false;
+  }
+  stacks.back.push(std::mem::replace(&mut stacks.current, target));
+  stacks.forward.clear();
+  true
+}
+
+/// Back button: push current to forward, pop back. False when empty.
+fn nav_back(stacks: &mut NavStacks) -> bool {
+  let Some(previous) = stacks.back.pop() else {
+    return false;
+  };
+  stacks
+    .forward
+    .push(std::mem::replace(&mut stacks.current, previous));
+  true
+}
+
+/// Forward button: push current to back, pop forward. False when empty.
+fn nav_forward(stacks: &mut NavStacks) -> bool {
+  let Some(next) = stacks.forward.pop() else {
+    return false;
+  };
+  stacks
+    .back
+    .push(std::mem::replace(&mut stacks.current, next));
+  true
+}
+
+/// Shared navigation state (main thread only).
+#[derive(Clone)]
+struct NavState {
+  stacks: Rc<RefCell<NavStacks>>,
+  snapshot: Rc<RefCell<Vec<model::SnapshotEntry>>>,
+  watch_rx: Rc<
+    RefCell<Option<std::sync::mpsc::Receiver<()>>>,
+  >,
+}
+
+/// Current folder (clone).
+fn nav_current(nav: &NavState) -> std::path::PathBuf {
+  nav.stacks.borrow().current.clone()
+}
+
+/// Display name of a folder for the title: file name, full path for roots.
+fn folder_title(base: &std::path::Path) -> String {
+  base
+    .file_name()
+    .and_then(|name| name.to_str())
+    .map(str::to_string)
+    .unwrap_or_else(|| base.to_string_lossy().into_owned())
+}
+
+/// One listed row for activation lookup (double-click by index).
+struct ListedEntry {
+  name: String,
+  is_dir: bool,
+}
+
+/// Toolbar navigation request (Send-bound callbacks route through
+/// the tick; double-click navigates directly).
+#[derive(Debug, Clone)]
+enum NavAction {
+  Back,
+  Forward,
+}
+
+/// Rewatch the current folder and reset its snapshot after
+/// navigation (replaces the previous watcher).
+fn rewatch(nav: &NavState) {
+  let base = nav_current(nav);
+  let fresh = crate::watch::watch_dir(&base).map(|(watcher, rx)| {
+    FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
+    rx
+  });
+  *nav.watch_rx.borrow_mut() = fresh;
+  *nav.snapshot.borrow_mut() = model::snapshot(&base);
+  eprintln!("[finder][nav] now in {}", base.display());
+}
+
+/// Shared tail of every navigation: cancel rename, rewatch, rebuild.
+fn after_navigate(nav: &NavState, session: &SharedSession, rebuild: &Rebuild) {
+  if let Ok(mut guard) = session.lock() {
+    *guard = None;
+  }
+  rewatch(nav);
+  rebuild();
+}
+
+/// Open the activated entry when it is still a directory. Guards
+/// with a live `is_dir` check in case the listing went stale.
+fn activate_index(
+  nav: &NavState,
+  listed: &Rc<RefCell<Vec<ListedEntry>>>,
+  session: &SharedSession,
+  rebuild: &Rebuild,
+  index: i32,
+) {
+  let hit = listed
+    .borrow()
+    .get(index as usize)
+    .map(|entry| (entry.name.clone(), entry.is_dir));
+  let Some((name, was_dir)) = hit else {
+    return;
+  };
+  if !was_dir {
+    eprintln!("[finder][nav] open file (later step): {name}");
+    return;
+  }
+  let target = nav_current(nav).join(&name);
+  if !target.is_dir() {
+    return;
+  }
+  if nav_to(&mut nav.stacks.borrow_mut(), target.clone()) {
+    eprintln!("[finder][nav] opened {}", target.display());
+    after_navigate(nav, session, rebuild);
+  }
+}
 
 /// Placeholder for an empty or unreadable directory.
 fn empty_view() -> gtk::Widget {
@@ -429,6 +564,16 @@ fn empty_view() -> gtk::Widget {
   empty_gtk
 }
 
+/// Title markup for the current folder (15px bold primary).
+fn title_markup(name: &str, pal: &Palette) -> String {
+  format!(
+    "<span font_desc=\"{} bold 15\" foreground=\"{}\">{}</span>",
+    SF_PRO,
+    pal.fg,
+    glib::markup_escape_text(name),
+  )
+}
+
 /// Rebuild the content area for the active view: icon grid or list.
 fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
   // Dismiss menus before tearing down their widgets.
@@ -438,9 +583,11 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
     child = widget.next_sibling();
     ctx.slot.remove(&widget);
   }
+  let base = nav_current(&ctx.nav);
+  ctx.title.set_markup(&title_markup(&folder_title(&base), &ctx.pal));
   match *ctx.mode.borrow() {
     prefs::ViewMode::Grid => {
-      if model::list_dir(&ctx.base).is_empty() {
+      if model::list_dir(&base).is_empty() {
         ctx.slot.append(&empty_view());
         ctx
           .status
@@ -450,11 +597,19 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
           &ctx.grid,
           &ctx.status,
           &ctx.pal,
-          &ctx.base,
+          &base,
           &ctx.session,
           &ctx.refresh,
+          &ctx.listed,
         );
-        ctx.slot.append(&ctx.grid_menu);
+        // Fresh empty-space menu each rebuild (captures the current base).
+        let wrapped = ContextMenu::new(GtkWrap::wrap(ctx.grid_scroll.clone()))
+          .entries(empty_space_menu(&base, &ctx.session, &ctx.refresh))
+          .to_gtk();
+        prepare_menu_popover(&wrapped);
+        wrapped.set_hexpand(true);
+        wrapped.set_vexpand(true);
+        ctx.slot.append(&wrapped);
       }
     }
     prefs::ViewMode::List => refresh_list(ctx, rebuild),
@@ -665,7 +820,15 @@ fn list_row(
 /// Rebuild the list view: fixed header plus one row per entry.
 fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
   let t0 = std::time::Instant::now();
-  let entries = model::list_dir(&ctx.base);
+  let base = nav_current(&ctx.nav);
+  let entries = model::list_dir(&base);
+  *ctx.listed.borrow_mut() = entries
+    .iter()
+    .map(|entry| ListedEntry {
+      name: entry.name.clone(),
+      is_dir: entry.is_dir,
+    })
+    .collect();
   let german = crate::lang::locale() == "de_de";
   if entries.is_empty() {
     ctx.slot.append(&empty_view());
@@ -691,7 +854,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     list.add_css_class("finder-list");
     for entry in &entries {
       let row = list_row(
-        &ctx.base,
+        &base,
         entry,
         &ctx.pal,
         german,
@@ -713,6 +876,16 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
       });
       row.add_controller(press);
     }
+    // Double-click (or Enter) opens folders.
+    {
+      let nav_c = ctx.nav.clone();
+      let listed_c = ctx.listed.clone();
+      let session_c = ctx.session.clone();
+      let rebuild_c = rebuild.clone();
+      list.connect_row_activated(move |_, row| {
+        activate_index(&nav_c, &listed_c, &session_c, &rebuild_c, row.index());
+      });
+    }
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&list));
     scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
@@ -725,7 +898,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     );
     scroll.add_css_class("finder-scroll");
     let menu = ContextMenu::new(GtkWrap::wrap(scroll.clone()))
-      .entries(empty_space_menu(&ctx.session, &ctx.refresh));
+      .entries(empty_space_menu(&base, &ctx.session, &ctx.refresh));
     let menu_gtk = menu.to_gtk();
     prepare_menu_popover(&menu_gtk);
     menu_gtk.set_hexpand(true);
@@ -949,7 +1122,7 @@ pub(crate) fn set_cell_selected(flow_child: &gtk::FlowBoxChild, selected: bool) 
   }
 }
 
-fn folder_cell(
+  fn folder_cell(
   base: &std::path::Path,
   entry: &model::DirEntry,
   pal: &Palette,
@@ -957,6 +1130,7 @@ fn folder_cell(
   refresh: &Refresh,
   grid: &gtk::FlowBox,
   status: &gtk::Label,
+  listed: &Rc<RefCell<Vec<ListedEntry>>>,
 ) -> gtk::Widget {
   // Fixed square cells: artwork (64) plus label always measure
   // CELL x CELL, so the grid looks identical in all four
@@ -988,7 +1162,7 @@ fn folder_cell(
     .unwrap_or(false);
   if editing {
     cell.append(&file_menu_wrap(
-      edit_field(base, entry, &shown, session, grid, status, pal, refresh),
+      edit_field(base, entry, &shown, session, grid, status, pal, refresh, listed),
       base,
       entry,
       session,
@@ -1079,6 +1253,7 @@ fn edit_field(
   status: &gtk::Label,
   pal: &Palette,
   refresh: &Refresh,
+  listed: &Rc<RefCell<Vec<ListedEntry>>>,
 ) -> gtk::Entry {
   let field = gtk::Entry::new();
   field.set_text(initial);
@@ -1107,6 +1282,7 @@ fn edit_field(
   let commit_pal = *pal;
   let commit_session2 = session.clone();
   let commit_refresh = refresh.clone();
+  let commit_listed = listed.clone();
   field.connect_activate(move |entry| {
     eprintln!("[finder][rename] enter pressed, typed={:?}", entry.text());
     let t0 = std::time::Instant::now();
@@ -1127,6 +1303,7 @@ fn edit_field(
         &commit_base,
         &commit_session2,
         &commit_refresh,
+        &commit_listed,
       );
       eprintln!(
         "[finder][rename] commit + rebuild done in {}ms",
@@ -1147,6 +1324,7 @@ fn edit_field(
   let cancel_base = base.to_path_buf();
   let cancel_session2 = session.clone();
   let cancel_refresh = refresh.clone();
+  let cancel_listed = listed.clone();
   let keys = gtk::EventControllerKey::new();
   keys.connect_key_pressed(move |_, key, _, _| {
     if key == gdk4::Key::Escape {
@@ -1160,6 +1338,7 @@ fn edit_field(
         &cancel_base,
         &cancel_session2,
         &cancel_refresh,
+        &cancel_listed,
       );
       glib::Propagation::Stop
     } else {
@@ -1172,10 +1351,14 @@ fn edit_field(
 }
 
 /// Empty-space context menu entries: New Folder, divider, Get Info,
-/// divider, New File submenu with Text File. Actions log for now,
-/// except New Folder which creates a folder and opens inline rename.
-pub(crate) fn empty_space_menu(session: &SharedSession, refresh: &Refresh) -> Vec<MenuEntry> {
-  let new_base = model::downloads_dir();
+/// divider, New File submenu with Text File. New Folder creates in
+/// `base` (the current folder) and opens inline rename.
+pub(crate) fn empty_space_menu(
+  base: &std::path::Path,
+  session: &SharedSession,
+  refresh: &Refresh,
+) -> Vec<MenuEntry> {
+  let new_base = base.to_path_buf();
   let new_session = session.clone();
   let new_refresh = refresh.clone();
   vec![
@@ -1308,15 +1491,38 @@ impl Widget for FinderRoot {
     toolbar_row.set_margin_start(12);
     toolbar_row.set_margin_end(12);
 
-    let nav = Toolbar::new()
-      .item(ToolbarItem::new("chevron.backward").on_click(|| println!("Finder back")))
-      .item(ToolbarItem::new("chevron.forward").on_click(|| println!("Finder forward")));
-    toolbar_row.append(&nav.to_gtk());
+    let base = model::downloads_dir();
+    let nav = NavState {
+      stacks: Rc::new(RefCell::new(NavStacks {
+        current: base.clone(),
+        back: Vec::new(),
+        forward: Vec::new(),
+      })),
+      snapshot: Rc::new(RefCell::new(Vec::new())),
+      watch_rx: Rc::new(RefCell::new(None)),
+    };
+    rewatch(&nav);
 
-    let title = markup_label(&lang::t("sidebar.downloads"), 15, "bold", pal.fg);
+    let (nav_tx, nav_rx) = std::sync::mpsc::channel::<NavAction>();
+    let back_tx = nav_tx.clone();
+    let forward_tx = nav_tx.clone();
+    let nav_toolbar = Toolbar::new()
+      .item(ToolbarItem::new("chevron.backward").on_click(move || {
+        eprintln!("[finder][nav] back button clicked");
+        let _ = back_tx.send(NavAction::Back);
+      }))
+      .item(ToolbarItem::new("chevron.forward").on_click(move || {
+        eprintln!("[finder][nav] forward button clicked");
+        let _ = forward_tx.send(NavAction::Forward);
+      }));
+    toolbar_row.append(&nav_toolbar.to_gtk());
+
+    let title = gtk::Label::new(None);
+    title.set_use_markup(true);
     title.set_halign(gtk::Align::Start);
     title.set_valign(gtk::Align::Center);
     title.set_hexpand(true);
+    title.set_markup(&title_markup(&folder_title(&base), &pal));
     toolbar_row.append(&title);
 
     let mode_state: Rc<RefCell<prefs::ViewMode>> =
@@ -1401,8 +1607,8 @@ impl Widget for FinderRoot {
     content_slot.set_hexpand(true);
     content_slot.set_vexpand(true);
 
-    // Grid scroll with the empty-space menu, built once and re-shown
-    // on every switch back to the grid.
+    // Grid scroll holding the persistent grid; the empty-space
+    // menu around it is rebuilt per refresh (current folder).
     let grid_scroll = gtk::ScrolledWindow::new();
     grid_scroll.set_child(Some(&grid));
     grid_scroll.set_hscrollbar_policy(gtk::PolicyType::Never);
@@ -1414,23 +1620,16 @@ impl Widget for FinderRoot {
       &format!(".finder-scroll {{ background-color: {}; }}", pal.bg),
     );
     grid_scroll.add_css_class("finder-scroll");
-    let grid_menu = {
-      let wrapped = ContextMenu::new(GtkWrap::wrap(grid_scroll.clone()))
-        .entries(empty_space_menu(&session, &refresh))
-        .to_gtk();
-      prepare_menu_popover(&wrapped);
-      wrapped.set_hexpand(true);
-      wrapped.set_vexpand(true);
-      wrapped
-    };
 
     let ctx = ViewCtx {
       slot: content_slot.clone(),
       grid: grid.clone(),
-      grid_menu: grid_menu.clone(),
+      grid_scroll: grid_scroll.clone(),
       status: status_label.clone(),
+      title: title.clone(),
       pal,
-      base: base.clone(),
+      nav: nav.clone(),
+      listed: Rc::new(RefCell::new(Vec::new())),
       session: session.clone(),
       refresh: refresh.clone(),
       mode: mode_state.clone(),
@@ -1444,18 +1643,15 @@ impl Widget for FinderRoot {
     detail.append(&status);
 
     // Live updates: the notify watcher, the menu/edit refresh
-    // signal and the view-switch signal share one 400ms main-thread
-    // tick that drains bursts and rebuilds the active view once per
-    // real change. The watcher also fires on plain file opens (every
-    // rebuild opens files), so a metadata snapshot gates the
-    // rebuild: without it the refresh retriggers itself and starves
-    // the UI.
-    let watch_rx = crate::watch::watch_dir(&base).map(|(watcher, rx)| {
-      FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
-      rx
-    });
+    // signal, the view-switch signal and the navigation signal
+    // share one 400ms main-thread tick that drains bursts and
+    // rebuilds the active view once per real change. The watcher
+    // also fires on plain file opens (every rebuild opens files),
+    // so a metadata snapshot gates the rebuild: without it the
+    // refresh retriggers itself and starves the UI. The watcher
+    // follows navigation (`rewatch`).
     let session_tick = session.clone();
-    let mut last_snapshot = model::snapshot(&base);
+    let nav_tick = nav.clone();
     // Rebuilds the active view (main thread only). List rows embed
     // a rebuild handle for rename commit/cancel; the handle is
     // installed after creation (a self-reference cannot be built in
@@ -1473,6 +1669,16 @@ impl Widget for FinderRoot {
     *rebuild_cell.borrow_mut() = Some(rebuild_all.clone());
     refresh_content(&ctx, &rebuild_all);
     let rebuild_tick = rebuild_all.clone();
+    // Double-click (or Enter) on a grid cell opens folders.
+    {
+      let nav_c = nav.clone();
+      let listed_c = ctx.listed.clone();
+      let session_c = session.clone();
+      let rebuild_c = rebuild_all.clone();
+      grid.connect_child_activated(move |_, child| {
+        activate_index(&nav_c, &listed_c, &session_c, &rebuild_c, child.index());
+      });
+    }
     let mode_tick = mode_state.clone();
     let mut last_active: Option<bool> = None;
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
@@ -1490,9 +1696,12 @@ impl Widget for FinderRoot {
         last_active = Some(current);
       }
       let mut watch_signaled = false;
-      if let Some(rx) = &watch_rx {
-        while rx.try_recv().is_ok() {
-          watch_signaled = true;
+      {
+        let guard = nav_tick.watch_rx.borrow();
+        if let Some(rx) = guard.as_ref() {
+          while rx.try_recv().is_ok() {
+            watch_signaled = true;
+          }
         }
       }
       let mut menu_signaled = false;
@@ -1503,7 +1712,16 @@ impl Widget for FinderRoot {
       while let Ok(mode) = view_rx.try_recv() {
         view_switch = Some(mode);
       }
-      if !watch_signaled && !menu_signaled && view_switch.is_none() {
+      let mut nav_moved = false;
+      while let Ok(action) = nav_rx.try_recv() {
+        eprintln!("[finder][nav] action {action:?}");
+        let moved = match action {
+          NavAction::Back => nav_back(&mut nav_tick.stacks.borrow_mut()),
+          NavAction::Forward => nav_forward(&mut nav_tick.stacks.borrow_mut()),
+        };
+        nav_moved |= moved;
+      }
+      if !watch_signaled && !menu_signaled && view_switch.is_none() && !nav_moved {
         return glib::ControlFlow::Continue;
       }
       if let Some(mode) = view_switch {
@@ -1513,10 +1731,13 @@ impl Widget for FinderRoot {
           apply_view_indicator(&view_buttons, mode);
           eprintln!("[finder][view] switched to {}", mode.as_str());
         }
-        let current = model::snapshot(&base);
-        last_snapshot = current;
+        *nav_tick.snapshot.borrow_mut() = model::snapshot(&nav_current(&nav_tick));
         rebuild_tick();
         eprintln!("[finder][view] rebuilt after switch");
+        return glib::ControlFlow::Continue;
+      }
+      if nav_moved {
+        after_navigate(&nav_tick, &session_tick, &rebuild_tick);
         return glib::ControlFlow::Continue;
       }
       let editing = !watch_refresh_allowed(&session_tick);
@@ -1526,13 +1747,13 @@ impl Widget for FinderRoot {
       let t0 = std::time::Instant::now();
       if watch_refresh_allowed(&session_tick) {
         if watch_signaled || menu_signaled {
-          let current = model::snapshot(&base);
-          if current != last_snapshot {
+          let current = model::snapshot(&nav_current(&nav_tick));
+          if current != *nav_tick.snapshot.borrow() {
             eprintln!(
               "[finder][tick] snapshot changed ({} entries), rebuilding",
               current.len()
             );
-            last_snapshot = current;
+            *nav_tick.snapshot.borrow_mut() = current;
             rebuild_tick();
             eprintln!("[finder][tick] rebuild took {}ms", t0.elapsed().as_millis());
           } else {
@@ -1545,7 +1766,7 @@ impl Widget for FinderRoot {
         // every 400ms and steal focus). Explicit menu/edit signals
         // still rebuild; the snapshot is synced so no stale rebuild
         // fires after the edit commits.
-        last_snapshot = model::snapshot(&base);
+        *nav_tick.snapshot.borrow_mut() = model::snapshot(&nav_current(&nav_tick));
         rebuild_tick();
         eprintln!(
           "[finder][tick] edit rebuild took {}ms",
@@ -1603,6 +1824,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   base: &std::path::Path,
   session: &SharedSession,
   refresh: &Refresh,
+  listed: &Rc<RefCell<Vec<ListedEntry>>>,
 ) {
   let t0 = std::time::Instant::now();
   let mut child = grid.first_child();
@@ -1612,6 +1834,13 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   }
   let t_list = std::time::Instant::now();
   let entries = model::list_dir(base);
+  *listed.borrow_mut() = entries
+    .iter()
+    .map(|entry| ListedEntry {
+      name: entry.name.clone(),
+      is_dir: entry.is_dir,
+    })
+    .collect();
   eprintln!(
     "[finder][refresh] list_dir {}: {} entries in {}ms",
     base.display(),
@@ -1620,7 +1849,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   );
   for (index, entry) in entries.iter().enumerate() {
     let t_cell = std::time::Instant::now();
-    grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status), -1);
+    grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status, listed), -1);
     // Right-click also selects the cell (Finder behavior): a capture
     // gesture on the FlowBoxChild runs before the menu gestures and
     // only selects, so the file menu still opens normally.
@@ -1673,9 +1902,42 @@ mod tests {
   }
 
   #[test]
+  fn nav_history_moves() {
+    use std::path::PathBuf;
+    let mut stacks = NavStacks {
+      current: PathBuf::from("/a"),
+      back: Vec::new(),
+      forward: Vec::new(),
+    };
+    // Empty stacks do nothing.
+    assert!(!nav_back(&mut stacks));
+    assert!(!nav_forward(&mut stacks));
+    assert!(!nav_to(&mut stacks, PathBuf::from("/a")));
+    // Fresh navigation pushes back and clears forward.
+    assert!(nav_to(&mut stacks, PathBuf::from("/b")));
+    assert_eq!(stacks.current, PathBuf::from("/b"));
+    assert_eq!(stacks.back, vec![PathBuf::from("/a")]);
+    assert!(stacks.forward.is_empty());
+    assert!(nav_to(&mut stacks, PathBuf::from("/c")));
+    // Back and forward shuttle current between stacks.
+    assert!(nav_back(&mut stacks));
+    assert_eq!(stacks.current, PathBuf::from("/b"));
+    assert!(nav_back(&mut stacks));
+    assert_eq!(stacks.current, PathBuf::from("/a"));
+    assert!(!nav_back(&mut stacks));
+    assert!(nav_forward(&mut stacks));
+    assert_eq!(stacks.current, PathBuf::from("/b"));
+    // A fresh navigation drops the forward trail.
+    assert!(nav_to(&mut stacks, PathBuf::from("/d")));
+    assert_eq!(stacks.current, PathBuf::from("/d"));
+    assert!(stacks.forward.is_empty());
+    assert!(!nav_forward(&mut stacks));
+  }
+
+  #[test]
   fn empty_space_menu_structure() {
-    let (session, refresh, _) = test_context();
-    let entries = empty_space_menu(&session, &refresh);
+    let (session, refresh, base) = test_context();
+    let entries = empty_space_menu(&base, &session, &refresh);
     assert_eq!(entries.len(), 5);
     assert!(matches!(entries[1], MenuEntry::Divider));
     assert!(matches!(entries[3], MenuEntry::Divider));

@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Folder navigation (double-click/Enter opens folders, back/forward history, title follows, watcher re-armed per folder).
 - 2026-09-12: Keep popovers out of measurement with `set_child_visible` instead of `set_visible` (fixes broken grab/autohide/popdown).
 - 2026-09-12: Dismiss context menus on window focus change (400ms tick polls `ApplicationWindow::is_active`).
 - 2026-09-12: Taken names count up (`Docs (2)`, `wallpaper (2).png`) on rename and create instead of failing.
