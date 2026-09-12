@@ -224,6 +224,28 @@ fn hide_idle_popover(wrapper: &gtk::Widget) {
   }
 }
 
+/// Wrap one widget (icon or text) with the per-file context menu.
+/// The menu hugs content: presses on cell padding, row gaps or the
+/// date/size columns fall through to the empty-space menu below,
+/// whose gesture then fires instead.
+fn file_menu_wrap(
+  inner: impl IsA<gtk::Widget>,
+  base: &std::path::Path,
+  entry: &model::DirEntry,
+  session: &SharedSession,
+  refresh: &Refresh,
+) -> gtk::Widget {
+  let menu = ContextMenu::new(GtkWrap::wrap(inner)).entries(file_menu_entries(
+    base,
+    entry,
+    session,
+    refresh,
+  ));
+  let wrapped = menu.to_gtk();
+  hide_idle_popover(&wrapped);
+  wrapped
+}
+
 /// Small type icon at the far left of a list row.
 const LIST_ICON: i32 = 20;
 /// Fixed width of the modified-date column (header and rows share it).
@@ -474,7 +496,13 @@ fn list_row(
   inner.set_margin_end(16);
   inner.set_margin_top(2);
   inner.set_margin_bottom(2);
-  inner.append(&row_icon(base, entry));
+
+  // Icon plus name hug content under one file menu; the expanding
+  // gap, date and size stay outside it, so presses there fall
+  // through to the empty-space menu. Left-click selection is
+  // unaffected (handled by the ListBox itself).
+  let namebox = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  namebox.append(&row_icon(base, entry));
 
   let shown = model::display_name(&entry.name, entry.is_dir);
   let editing = session
@@ -484,15 +512,20 @@ fn list_row(
     .map(|edit| edit.path == base.join(&entry.name))
     .unwrap_or(false);
   if editing {
-    inner.append(&list_edit_field(base, entry, &shown, session, rebuild));
+    namebox.append(&list_edit_field(base, entry, &shown, session, rebuild));
   } else {
     let label = markup_label(&shown, 13, "normal", pal.fg);
     label.set_halign(gtk::Align::Start);
-    label.set_hexpand(true);
+    label.set_max_width_chars(32);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.add_css_class("fd-label");
-    inner.append(&label);
+    namebox.append(&label);
   }
+  inner.append(&file_menu_wrap(namebox, base, entry, session, refresh));
+
+  let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+  gap.set_hexpand(true);
+  inner.append(&gap);
 
   let meta = model::file_meta(base, &entry.name);
   let date = markup_label(&model::format_mtime(meta.mtime_secs, german), 12, "normal", pal.secondary);
@@ -510,15 +543,7 @@ fn list_row(
   size.set_halign(gtk::Align::End);
   inner.append(&size);
 
-  let menu = ContextMenu::new(GtkWrap::wrap(inner.clone())).entries(file_menu_entries(
-    base,
-    entry,
-    session,
-    refresh,
-  ));
-  let wrapped = menu.to_gtk();
-  hide_idle_popover(&wrapped);
-  row.set_child(Some(&wrapped));
+  row.set_child(Some(&inner));
   row
 }
 
@@ -813,48 +838,16 @@ fn folder_cell(
   cell.set_valign(gtk::Align::Start);
   cell.add_css_class("fd-cell");
 
-  // `.app` bundles show the app icon rendered once through CoreIcon.
-  // Directories show the default folder icon. Images show the picture
-  // itself, videos show the cached first-second frame (themed icon
-  // while ffmpeg is missing), audio files show the music icon. Other
-  // files show no icon, only the name without extension.
-  if entry.is_app {
-    let full = base.join(&entry.name);
-    match icons::app_icon(&full) {
-      Some(icon) => cell.append(&preview_image(&icon)),
-      None => cell.append(&folder_art()),
-    }
-  } else if entry.is_dir {
-    cell.append(&folder_icon_art());
-  } else {
-    let full = base.join(&entry.name);
-    match model::file_kind(&entry.ext) {
-      model::FileKind::Image => cell.append(&rounded_preview(&full)),
-      model::FileKind::Video => match icons::video_thumb(&full) {
-        Some(thumb) => cell.append(&rounded_preview(&thumb)),
-        None => match icons::video_placeholder().or_else(icons::video_icon) {
-          Some(icon) => cell.append(&preview_image(&icon)),
-          None => cell.append(&folder_art()),
-        },
-      },
-      model::FileKind::Audio => match icons::audio_icon() {
-        Some(icon) => cell.append(&preview_image(&icon)),
-        None => cell.append(&folder_art()),
-      },
-      model::FileKind::Archive => match icons::archive_icon() {
-        Some(icon) => cell.append(&preview_image(&icon)),
-        None => cell.append(&folder_art()),
-      },
-      model::FileKind::Other => {
-        let icon = model::document_icon(&entry.ext)
-          .and_then(icons::extension_icon)
-          .or_else(icons::generic_file_icon);
-        if let Some(path) = icon {
-          cell.append(&preview_image(&path));
-        }
-      }
-    }
-  }
+  // Icon and text carry their own file menu each, so padding
+  // presses fall through to the empty-space menu. Left-click
+  // selection is unaffected (handled by the FlowBox itself).
+  cell.append(&file_menu_wrap(
+    folder_artwork(base, entry),
+    base,
+    entry,
+    session,
+    refresh,
+  ));
 
   let shown = model::display_name(&entry.name, entry.is_dir);
   let editing = session
@@ -864,7 +857,13 @@ fn folder_cell(
     .map(|edit| edit.path == base.join(&entry.name))
     .unwrap_or(false);
   if editing {
-    cell.append(&edit_field(base, entry, &shown, session, grid, status, pal, refresh));
+    cell.append(&file_menu_wrap(
+      edit_field(base, entry, &shown, session, grid, status, pal, refresh),
+      base,
+      entry,
+      session,
+      refresh,
+    ));
   } else {
     let label = gtk::Label::new(Some(&shown));
     label.set_halign(gtk::Align::Center);
@@ -880,20 +879,62 @@ fn folder_cell(
     );
     crate::UIKit::widget::apply_css(&label, &css);
     label.add_css_class("fd-label");
-    cell.append(&label);
+    cell.append(&file_menu_wrap(label, base, entry, session, refresh));
   }
 
-  // Per-file context menu. The inner gesture claims the press first,
-  // so the empty-space menu on the scroll area stays hidden over files.
-  let menu = ContextMenu::new(GtkWrap::wrap(cell)).entries(file_menu_entries(
-    base,
-    entry,
-    session,
-    refresh,
-  ));
-  let wrapped = menu.to_gtk();
-  hide_idle_popover(&wrapped);
-  wrapped
+  cell.upcast()
+}
+
+/// Grid artwork for one entry (icon only, no label): `.app`
+/// bundles show the app icon rendered once through CoreIcon,
+/// directories the default folder icon, images the picture itself,
+/// videos the cached first-second frame (placeholder while `ffmpeg`
+/// is missing), audio files the music icon, archives the zip icon.
+/// Other files show their document icon; files without any icon
+/// render an empty holder so the name keeps its position.
+fn folder_artwork(base: &std::path::Path, entry: &model::DirEntry) -> gtk::Widget {
+  if entry.is_app {
+    let full = base.join(&entry.name);
+    match icons::app_icon(&full) {
+      Some(icon) => preview_image(&icon).upcast(),
+      None => folder_art().upcast(),
+    }
+  } else if entry.is_dir {
+    folder_icon_art().upcast()
+  } else {
+    let full = base.join(&entry.name);
+    match model::file_kind(&entry.ext) {
+      model::FileKind::Image => rounded_preview(&full).upcast(),
+      model::FileKind::Video => match icons::video_thumb(&full) {
+        Some(thumb) => rounded_preview(&thumb).upcast(),
+        None => match icons::video_placeholder().or_else(icons::video_icon) {
+          Some(icon) => preview_image(&icon).upcast(),
+          None => folder_art().upcast(),
+        },
+      },
+      model::FileKind::Audio => match icons::audio_icon() {
+        Some(icon) => preview_image(&icon).upcast(),
+        None => folder_art().upcast(),
+      },
+      model::FileKind::Archive => match icons::archive_icon() {
+        Some(icon) => preview_image(&icon).upcast(),
+        None => folder_art().upcast(),
+      },
+      model::FileKind::Other => {
+        let icon = model::document_icon(&entry.ext)
+          .and_then(icons::extension_icon)
+          .or_else(icons::generic_file_icon);
+        match icon {
+          Some(path) => preview_image(&path).upcast(),
+          None => {
+            let gap = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            gap.set_size_request(ARTWORK, ARTWORK);
+            gap.upcast()
+          }
+        }
+      }
+    }
+  }
 }
 
 /// Inline rename field prefilled with the display name. Enter commits

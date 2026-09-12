@@ -356,8 +356,10 @@ entries match the watched directory.
 
 ## Empty-space context menu
 
-Right-clicking empty grid space shows a TontooUI `ContextMenu`
-(`empty_space_menu()` in `src/views/finder.rs`):
+Right-clicking empty space shows a TontooUI `ContextMenu`
+(`empty_space_menu()` in `src/views/finder.rs`): empty grid area,
+cell padding around icon and text, and (in the list view) the gap
+plus the date and size columns. Left-click selection is unaffected.
 
 | Order | Entry |
 |---|---|
@@ -367,17 +369,19 @@ Right-clicking empty grid space shows a TontooUI `ContextMenu`
 | 4 | Divider |
 | 5 | `context.new_file` submenu (New File) with `context.text_file` (Text File, no action yet) |
 
-Each file cell carries its own `ContextMenu` (see below); its inner
-gesture claims the press first, so this menu stays hidden over files.
-All actions log for now; creating folders/files and the info panel
-are later steps.
+Each icon and each name carries its own `ContextMenu` (see
+below); their inner gestures claim the press first, so this menu
+stays hidden over icons and text. All actions log for now;
+creating folders/files and the info panel are later steps.
 
 ## File context menu
 
-Right-clicking a file or folder shows a per-file `ContextMenu`
-(`file_menu_entries(name)` in `src/views/finder.rs`). The inner cell
-gesture claims the press first, so the empty-space menu stays hidden
-over files.
+Right-clicking an icon or a name shows a per-file `ContextMenu`
+(`file_menu_entries(name)` in `src/views/finder.rs`,
+`file_menu_wrap()` hugs one widget). Grid cells wrap artwork and
+label separately, list rows wrap icon plus name; presses anywhere
+else (padding, gaps, date/size columns) fall through to the
+empty-space menu above.
 
 | Order | Entry |
 |---|---|

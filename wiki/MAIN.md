@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: File menus hug icon and text in both views; padding, gaps and date/size columns open the empty-space menu.
 - 2026-09-12: List view with Name/Date/Size columns, toolbar view switch with select indicator, per-user CoreData persistence (`com.tontoo.finder`).
 - 2026-09-12: Padded all `extensionicons` to a square 192x192 canvas so every document icon renders at equal width and height.
 - 2026-09-12: Scaled the whole grid down 25% (84px cells, 48px artwork, 54px folders) with one shared `PREVIEW_SIZE`.

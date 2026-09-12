@@ -62,10 +62,12 @@ margins (16) and fixed column widths, so columns align:
 | Size | 110px (`SIZE_WIDTH`) | End |
 
 Single-click selection uses the native list selection styled like
-the grid (`.fd-row:selected`, blue fill plus white labels). Each
-row carries the same per-file context menu as grid cells (Rename
-opens the inline field inside the row); the empty-space menu wraps
-the scrolled list.
+the grid (`.fd-row:selected`, blue fill plus white labels). The
+file menu hugs icon plus name (`file_menu_wrap`); the expanding
+gap and the date/size columns fall through to the empty-space
+menu. Each row carries the same per-file context menu as grid
+cells (Rename opens the inline field inside the row); the
+empty-space menu wraps the scrolled list.
 
 ### `list_header`
 
@@ -107,6 +109,17 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild)
 
 Rebuilds header plus rows and the status line. Logs the row count
 and time (`[finder][refresh] rebuilt ... list rows`).
+
+### `file_menu_wrap`
+
+```rust
+fn file_menu_wrap(inner: impl IsA<gtk::Widget>, base: &Path, entry: &DirEntry, session: &SharedSession, refresh: &Refresh) -> gtk::Widget
+```
+
+Wraps one widget (grid artwork, grid label, list icon-plus-name)
+with the per-file context menu. Menus hug content, so presses on
+padding, gaps or date/size columns fall through to the
+empty-space menu.
 
 ## Columns
 
