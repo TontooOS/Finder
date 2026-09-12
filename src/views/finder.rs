@@ -26,6 +26,19 @@ use std::sync::{Arc, Mutex};
 thread_local! {
   /// Keeps the downloads watcher alive for the app lifetime.
   static FOLDER_WATCHER: RefCell<Option<notify::RecommendedWatcher>> = RefCell::new(None);
+  /// Active search filter, already normalized (trimmed, lowercase).
+  /// Empty means no filtering. Main thread only.
+  static SEARCH_QUERY: RefCell<String> = RefCell::new(String::new());
+}
+
+/// Current search filter (normalized, may be empty).
+fn search_query() -> String {
+  SEARCH_QUERY.with(|slot| slot.borrow().clone())
+}
+
+/// Set the search filter from raw input.
+fn set_search_query(raw: &str) {
+  SEARCH_QUERY.with(|slot| *slot.borrow_mut() = model::normalize_query(raw));
 }
 
 /// Inline rename session: the entry path currently edited.
@@ -623,9 +636,20 @@ fn activate_index(
 
 /// Placeholder for an empty or unreadable directory.
 fn empty_view() -> gtk::Widget {
+  empty_view_for(&search_query())
+}
+
+/// Placeholder picked by state: no-match text while searching,
+/// otherwise the folder-empty text.
+fn empty_view_for(query: &str) -> gtk::Widget {
+  let (title_key, hint_key) = if query.is_empty() {
+    ("detail.empty", "detail.empty.hint")
+  } else {
+    ("search.empty", "search.empty.hint")
+  };
   let empty = ContentUnavailableView::new()
-    .title(lang::t("detail.empty"))
-    .message(lang::t("detail.empty.hint"));
+    .title(lang::t(title_key))
+    .message(lang::t(hint_key));
   let empty_gtk = empty.to_gtk();
   empty_gtk.set_hexpand(true);
   empty_gtk.set_vexpand(true);
@@ -891,7 +915,11 @@ fn list_row(
 fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
   let t0 = std::time::Instant::now();
   let base = nav_current(&ctx.nav);
-  let entries = model::list_dir(&base);
+  let query = search_query();
+  let mut entries = model::list_dir(&base);
+  if !query.is_empty() {
+    entries.retain(|entry| model::matches_query(&entry.name, &query));
+  }
   *ctx.listed.borrow_mut() = entries
     .iter()
     .map(|entry| ListedEntry {
@@ -1620,10 +1648,91 @@ impl Widget for FinderRoot {
     apply_view_indicator(&view_buttons, *mode_state.borrow());
     toolbar_row.append(&views_gtk);
 
+    // Search field (built once, shown on demand): expands the
+    // actions row, filters the current folder live by name, keeps
+    // the filter when collapsed, clears on Escape.
+    let search_entry = gtk::SearchEntry::new();
+    search_entry.set_placeholder_text(Some(&lang::t("detail.search")));
+    search_entry.set_width_chars(18);
+    search_entry.set_valign(gtk::Align::Center);
+    {
+      let (field_bg, field_fg) = if dark {
+        ("#3a3a3c", "#ececec")
+      } else {
+        ("#ffffff", "#1d1d1d")
+      };
+      crate::UIKit::widget::apply_css(
+        &search_entry,
+        &format!(
+          ".fd-search {{ background-color: {field_bg}; color: {field_fg}; \
+            border-radius: 14px; border: none; padding: 4px 10px; \
+            font-family: '{SF_PRO}'; font-size: 13px; }}"
+        ),
+      );
+    }
+    search_entry.add_css_class("fd-search");
+
+    // Expand the actions row with the search field (or collapse it
+    // back to the icon when already shown). The button callback is
+    // wired directly (main thread), so expanding feels instant.
+    let expand_search = {
+      let row_c = toolbar_row.clone();
+      let entry_c = search_entry.clone();
+      move || {
+        if entry_c.parent().is_none() {
+          entry_c.set_text(&search_query());
+          row_c.append(&entry_c);
+          entry_c.grab_focus();
+          eprintln!("[finder][search] expanded");
+        } else {
+          row_c.remove(&entry_c);
+          eprintln!("[finder][search] collapsed");
+        }
+      }
+    };
+    // Collapse without clearing (clicking away keeps the filter).
+    let collapse_search: Rc<dyn Fn()> = Rc::new({
+      let row_c = toolbar_row.clone();
+      let entry_c = search_entry.clone();
+      move || {
+        if entry_c.parent().is_some() {
+          row_c.remove(&entry_c);
+          eprintln!("[finder][search] collapsed");
+        }
+      }
+    });
+
     let actions = Toolbar::new()
       .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
-      .item(ToolbarItem::new("magnifyingglass").on_click(|| println!("Finder search")));
-    toolbar_row.append(&actions.to_gtk());
+      .item(ToolbarItem::new("magnifyingglass"));
+    let actions_gtk = actions.to_gtk();
+    // Wire the search button directly (its `on_click` is Send-bound
+    // and must not touch widgets): last button in the group.
+    if let Some(search_btn) = collect_view_buttons(&actions_gtk).pop() {
+      let expand_c = expand_search;
+      search_btn.connect_clicked(move |_| expand_c());
+    }
+    toolbar_row.append(&actions_gtk);
+    // Escape clears the query and collapses; focus loss collapses
+    // and keeps the filter.
+    {
+      let entry_c = search_entry.clone();
+      let collapse_c = collapse_search.clone();
+      let keys = gtk::EventControllerKey::new();
+      keys.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk4::Key::Escape {
+          entry_c.set_text("");
+          collapse_c();
+          glib::Propagation::Stop
+        } else {
+          glib::Propagation::Proceed
+        }
+      });
+      search_entry.add_controller(keys);
+      let focus = gtk::EventControllerFocus::new();
+      focus.connect_leave(move |_| collapse_search());
+      search_entry.add_controller(focus);
+    }
 
     detail.append(&toolbar_row);
 
@@ -1739,6 +1848,16 @@ impl Widget for FinderRoot {
       })
     };
     *rebuild_cell.borrow_mut() = Some(rebuild_all.clone());
+    // Live search: every keystroke filters the current folder by
+    // name and rebuilds immediately (main-thread signal, no tick).
+    {
+      let rebuild_c = rebuild_all.clone();
+      search_entry.connect_changed(move |entry| {
+        set_search_query(&entry.text());
+        eprintln!("[finder][search] query={:?}", entry.text());
+        rebuild_c();
+      });
+    }
     refresh_content(&ctx, &rebuild_all);
     let rebuild_tick = rebuild_all.clone();
     // Double-click (or Enter) on a grid cell opens folders.
@@ -1905,7 +2024,11 @@ fn refresh_grid(  grid: &gtk::FlowBox,
     grid.remove(&widget);
   }
   let t_list = std::time::Instant::now();
-  let entries = model::list_dir(base);
+  let query = search_query();
+  let mut entries = model::list_dir(base);
+  if !query.is_empty() {
+    entries.retain(|entry| model::matches_query(&entry.name, &query));
+  }
   *listed.borrow_mut() = entries
     .iter()
     .map(|entry| ListedEntry {

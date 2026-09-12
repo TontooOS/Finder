@@ -40,5 +40,7 @@
   "status.free": "1.06 TB",
   "list.name": "Name",
   "list.date": "Date Modified",
-  "list.size": "Size"
+  "list.size": "Size",
+  "search.empty": "No results",
+  "search.empty.hint": "Try a different search."
 }

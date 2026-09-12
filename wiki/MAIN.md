@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Toolbar search with live name filtering, collapse-keeps-filter, Escape clears, no-match empty state.
 - 2026-09-12: Folders open on double-click only (single-click selects).
 - 2026-09-12: Dead menu areas (dividers, padding, tags) dismiss only the menu via hit-testing; button presses run actions.
 - 2026-09-12: Detach idle cell/row popovers and re-attach before popup (narrow columns with textbook grab/autohide/popdown).

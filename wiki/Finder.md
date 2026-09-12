@@ -55,10 +55,10 @@ Three `TontooUI::Toolbar` groups in a `gtk::Box` row:
 |---|---|
 | Navigation | `chevron.backward` (back), `chevron.forward` (forward) |
 | View switch | `square.grid.2x2` (icons), `list.bullet` (list), with select indicator, see [ListView.md](ListView.md) |
-| Actions | `square.and.arrow.up` (share), `magnifyingglass` (search) |
+| Actions | `square.and.arrow.up` (share), `magnifyingglass` (search: expands a live name filter) |
 
-The share and search buttons currently log their action; search
-filtering is a later step.
+The share button currently logs its action; search filtering is
+described below.
 
 ## Navigation
 
@@ -69,6 +69,16 @@ a no-op). The title shows the current folder name, the status line
 its item count, and the `notify` watcher follows along
 (`rewatch`). An in-progress inline rename is cancelled on
 navigation. Opening files is a later step (logs for now).
+
+## Search
+
+The magnifying glass expands the actions row with a search field
+(`detail.search` placeholder). Every keystroke filters the current
+folder live by name in both views (`.txt` matches all text files);
+only names are searched, never contents. Clicking away collapses
+back to the icon and keeps the filter; Escape clears it. No match
+shows `search.empty` (`Keine Treffer`) instead of the folder-empty
+text, and the status count follows the filtered entries.
 
 ## Downloads grid
 

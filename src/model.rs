@@ -186,6 +186,19 @@ pub fn item_count(entries: &[DirEntry]) -> usize {
   entries.len()
 }
 
+/// Normalize a search query (trimmed, lowercase). Stored once so
+/// every row compares cheaply.
+pub fn normalize_query(raw: &str) -> String {
+  raw.trim().to_lowercase()
+}
+
+/// True when a file name matches the (already normalized) query.
+/// Empty queries match everything; only names are searched, never
+/// file contents.
+pub fn matches_query(name: &str, query: &str) -> bool {
+  query.is_empty() || name.to_lowercase().contains(query)
+}
+
 /// Free variant of a desired on-disk name: returns `desired` when
 /// unused, else `stem (2)`, `stem (3)`, ... The counter goes before
 /// the file extension (`wallpaper (2).png`), at the very end for
@@ -576,5 +589,16 @@ mod tests {
     assert_eq!(unique_name(&base, ".gitignore", false), ".gitignore (2)");
 
     let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn search_matches_names_only_case_insensitive() {
+    assert!(matches_query("notes.txt", &normalize_query("")));
+    assert!(matches_query("notes.txt", &normalize_query(".txt")));
+    assert!(matches_query("notes.txt", &normalize_query("NOTES")));
+    assert!(matches_query("notes.txt", &normalize_query("  te  ")));
+    assert!(matches_query("Untitled Folder", &normalize_query("folder")));
+    assert!(!matches_query("notes.txt", &normalize_query(".md")));
+    assert!(!matches_query("notes.txt", &normalize_query("xyz")));
   }
 }
