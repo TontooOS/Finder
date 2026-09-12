@@ -361,6 +361,10 @@ Right-clicking empty space shows a TontooUI `ContextMenu`
 (`empty_space_menu()` in `src/views/finder.rs`): empty grid area,
 cell padding around icon and text, and (in the list view) the gap
 plus the date and size columns. Left-click selection is unaffected.
+Every wrapper popover registers in a thread-local list
+(`OPEN_MENUS`); selection changes, view switches and rebuilds
+dismiss all menus explicitly (`popdown_all_menus`), since GTK
+autohide does not reliably close these parented popovers.
 
 | Order | Entry |
 |---|---|

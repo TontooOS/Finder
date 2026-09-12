@@ -214,14 +214,44 @@ fn folder_icon_art() -> gtk::Box {
 /// the wrapped widget's minimum width (FlowBox columns grew to
 /// ~230px, showing 5 instead of 8). `popup()` re-shows it on
 /// right-click, so hiding only affects the idle state.
+///
+/// Every wrapper popover is also registered below so selection
+/// changes and rebuilds can dismiss menus explicitly (GTK autohide
+/// does not reliably close these parented popovers; rebuilds used
+/// to destroy them as a side effect, which the snapshot gate
+/// stopped).
 fn hide_idle_popover(wrapper: &gtk::Widget) {
   let mut cursor = wrapper.first_child();
   while let Some(widget) = cursor {
     cursor = widget.next_sibling();
     if let Ok(pop) = widget.clone().downcast::<gtk::Popover>() {
       pop.set_visible(false);
+      OPEN_MENUS.with(|slot| slot.borrow_mut().push(pop.downgrade()));
     }
   }
+}
+
+thread_local! {
+  /// Weak handles of every context-menu popover (cells, rows,
+  /// empty-space areas). Dead entries are pruned on each dismiss.
+  static OPEN_MENUS: RefCell<Vec<glib::WeakRef<gtk::Popover>>> =
+    RefCell::new(Vec::new());
+}
+
+/// Dismiss every known context menu. Called on selection changes,
+/// view switches and rebuilds, so a menu never survives the action
+/// or selection that follows it.
+fn popdown_all_menus() {
+  OPEN_MENUS.with(|slot| {
+    slot.borrow_mut().retain(|weak| {
+      if let Some(pop) = weak.upgrade() {
+        pop.popdown();
+        true
+      } else {
+        false
+      }
+    });
+  });
 }
 
 /// Wrap one widget (icon or text) with the per-file context menu.
@@ -318,6 +348,8 @@ fn empty_view() -> gtk::Widget {
 
 /// Rebuild the content area for the active view: icon grid or list.
 fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
+  // Dismiss menus before tearing down their widgets.
+  popdown_all_menus();
   let mut child = ctx.slot.first_child();
   while let Some(widget) = child {
     child = widget.next_sibling();
@@ -562,6 +594,8 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
+    // A new selection dismisses any open menu first.
+    list.connect_row_selected(|_, _| popdown_all_menus());
     crate::UIKit::widget::apply_css(
       &list,
       &format!(
@@ -1246,6 +1280,8 @@ impl Widget for FinderRoot {
        .fd-label.fd-lbl-sel { color: #ffffff; }",
     );
     grid.connect_selected_children_changed(|flow| {
+      // A new selection dismisses any open menu first.
+      popdown_all_menus();
       let mut cursor = flow.first_child();
       while let Some(widget) = cursor {
         cursor = widget.next_sibling();
