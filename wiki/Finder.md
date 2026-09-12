@@ -72,13 +72,15 @@ navigation. Opening files is a later step (logs for now).
 
 ## Search
 
-The magnifying glass expands the actions row with a search field
-(`detail.search` placeholder). Every keystroke filters the current
-folder live by name in both views (`.txt` matches all text files);
-only names are searched, never contents. Clicking away collapses
-back to the icon and keeps the filter; Escape clears it. No match
-shows `search.empty` (`Keine Treffer`) instead of the folder-empty
-text, and the status count follows the filtered entries.
+The magnifying glass swaps itself with a search field in place,
+so the actions glass group grows (`detail.search` placeholder).
+Every keystroke filters the current folder live by name in both
+views (`.txt` matches all text files); only names are searched,
+never contents. Clicking away collapses back to the icon and keeps
+the filter; Escape clears it. The open state is tracked locally
+(never a GTK parent query). No match shows `search.empty`
+(`Keine Treffer`) instead of the folder-empty text, and the status
+count follows the filtered entries.
 
 ## Downloads grid
 

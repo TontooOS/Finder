@@ -19,7 +19,7 @@ use crate::TontooUI::{
 use crate::UIKit::prelude::*;
 use crate::UIKit::widget::{WidgetId, next_widget_id};
 use gtk::prelude::*;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -229,15 +229,20 @@ fn find_menu_popover(wrapper: &gtk::Widget) -> Option<gtk::Popover> {
 }
 
 thread_local! {
-  /// Every context-menu popover plus whether it may hang detached:
-  /// cell/row popovers (`true`) live unparented while idle (zero
-  /// size contribution, kept alive by this registry) and are
-  /// re-attached on right-press before the SDK popup runs, so
-  /// coordinates, grab, autohide and popdown all behave like a
-  /// textbook popover. Scroll/empty-space popovers (`false`) stay
-  /// parented (their wide hosts do not care). The registry is
-  /// cleared on every rebuild; entries never outlive their view.
-  static OPEN_MENUS: RefCell<Vec<(gtk::Popover, bool)>> = RefCell::new(Vec::new());
+  /// Every context-menu popover: the popup, whether it may hang
+  /// detached (cell/row menus; scroll menus stay parented), and
+  /// whether WE currently have it parented. Never ask GTK about
+  /// parenthood: `parent()` on a widget whose parent died trips
+  /// `gtk_widget_get_parent` criticals, so the flag is the single
+  /// source of truth (set on re-attach, cleared on dismiss).
+  static OPEN_MENUS: RefCell<Vec<TrackedMenu>> = RefCell::new(Vec::new());
+}
+
+/// One registered popover (see `OPEN_MENUS`).
+struct TrackedMenu {
+  pop: gtk::Popover,
+  detachable: bool,
+  parented: Rc<Cell<bool>>,
 }
 
 /// Forget all registered popovers. Called on rebuild after
@@ -256,15 +261,17 @@ fn popdown_all_menus() {
   OPEN_MENUS.with(|slot| {
     let guard = slot.borrow();
     let mut open = 0;
-    for (pop, detachable) in guard.iter() {
-      if pop.is_visible() {
+    for entry in guard.iter() {
+      if entry.pop.is_visible() {
         open += 1;
       }
-      popdown_tree(pop);
-      // Detached-again after dismiss: the next measure must see the
-      // bare cell/row, and teardown must never meet a mapped child.
-      if *detachable && pop.parent().is_some() {
-        pop.unparent();
+      popdown_tree(&entry.pop);
+      // Detached-again after dismiss (tracked flag only, never a
+      // GTK parent query): the next measure must see the bare
+      // cell/row, and teardown must never meet a mapped child.
+      if entry.detachable && entry.parented.get() {
+        entry.pop.unparent();
+        entry.parented.set(false);
       }
     }
     let live = guard.len();
@@ -358,8 +365,13 @@ fn popdown_tree(pop: &gtk::Popover) {
 /// popovers hang detached (see `file_menu_wrap`).
 fn register_menu_popover(wrapper: &gtk::Widget) {
   if let Some(pop) = find_menu_popover(wrapper) {
-    attach_menu_background_dismiss(&pop);
-    OPEN_MENUS.with(|slot| slot.borrow_mut().push((pop, false)));
+    OPEN_MENUS.with(|slot| {
+      slot.borrow_mut().push(TrackedMenu {
+        pop,
+        detachable: false,
+        parented: Rc::new(Cell::new(true)),
+      })
+    });
   }
 }
 
@@ -419,10 +431,15 @@ fn file_menu_wrap(
     // Dead-area presses inside the open menu dismiss it (attached
     // below); button presses pass through to their actions.
     attach_menu_background_dismiss(&pop);
-    if pop.parent().is_some() {
-      pop.unparent();
-    }
-    OPEN_MENUS.with(|slot| slot.borrow_mut().push((pop.clone(), true)));
+    pop.unparent();
+    let parented = Rc::new(Cell::new(false));
+    OPEN_MENUS.with(|slot| {
+      slot.borrow_mut().push(TrackedMenu {
+        pop: pop.clone(),
+        detachable: true,
+        parented: parented.clone(),
+      })
+    });
     let pop_c = pop;
     let wrap_w = wrapped.downgrade();
     let reattach = gtk::GestureClick::new();
@@ -430,8 +447,9 @@ fn file_menu_wrap(
     reattach.set_propagation_phase(gtk::PropagationPhase::Capture);
     reattach.connect_pressed(move |_, _, _, _| {
       if let Some(container) = wrap_w.upgrade() {
-        if pop_c.parent().is_none() {
+        if !parented.get() {
           pop_c.set_parent(&container);
+          parented.set(true);
         }
       }
     });
@@ -685,7 +703,7 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
         ctx.slot.append(&empty_view());
         ctx
           .status
-          .set_markup(&status_markup(&[], &ctx.pal));
+          .set_markup(&status_markup(&[], &ctx.pal, &base));
       } else {
         refresh_grid(
           &ctx.grid,
@@ -695,6 +713,7 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
           &ctx.session,
           &ctx.refresh,
           &ctx.listed,
+          rebuild,
         );
         // Fresh empty-space menu each rebuild (captures the current base).
         let wrapped = ContextMenu::new(GtkWrap::wrap(ctx.grid_scroll.clone()))
@@ -1006,7 +1025,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
   }
   ctx
     .status
-    .set_markup(&status_markup(&entries, &ctx.pal));
+    .set_markup(&status_markup(&entries, &ctx.pal, &base));
   eprintln!(
     "[finder][refresh] rebuilt {} list rows in {}ms",
     entries.len(),
@@ -1226,9 +1245,8 @@ pub(crate) fn set_cell_selected(flow_child: &gtk::FlowBoxChild, selected: bool) 
   pal: &Palette,
   session: &SharedSession,
   refresh: &Refresh,
-  grid: &gtk::FlowBox,
-  status: &gtk::Label,
   listed: &Rc<RefCell<Vec<ListedEntry>>>,
+  rebuild: &Rebuild,
 ) -> gtk::Widget {
   // Fixed square cells: artwork (64) plus label always measure
   // CELL x CELL, so the grid looks identical in all four
@@ -1260,7 +1278,7 @@ pub(crate) fn set_cell_selected(flow_child: &gtk::FlowBoxChild, selected: bool) 
     .unwrap_or(false);
   if editing {
     cell.append(&file_menu_wrap(
-      edit_field(base, entry, &shown, session, grid, status, pal, refresh, listed),
+      edit_field(base, entry, &shown, session, rebuild),
       base,
       entry,
       session,
@@ -1347,11 +1365,7 @@ fn edit_field(
   entry: &model::DirEntry,
   initial: &str,
   session: &SharedSession,
-  grid: &gtk::FlowBox,
-  status: &gtk::Label,
-  pal: &Palette,
-  refresh: &Refresh,
-  listed: &Rc<RefCell<Vec<ListedEntry>>>,
+  rebuild: &Rebuild,
 ) -> gtk::Entry {
   let field = gtk::Entry::new();
   field.set_text(initial);
@@ -1375,12 +1389,7 @@ fn edit_field(
   let ext = entry.ext.clone();
   let commit_base = base.to_path_buf();
   let commit_session = session.clone();
-  let commit_grid = grid.clone();
-  let commit_status = status.clone();
-  let commit_pal = *pal;
-  let commit_session2 = session.clone();
-  let commit_refresh = refresh.clone();
-  let commit_listed = listed.clone();
+  let commit_rebuild = rebuild.clone();
   field.connect_activate(move |entry| {
     eprintln!("[finder][rename] enter pressed, typed={:?}", entry.text());
     let t0 = std::time::Instant::now();
@@ -1394,15 +1403,7 @@ fn edit_field(
       if let Ok(mut guard) = commit_session.lock() {
         *guard = None;
       }
-      refresh_grid(
-        &commit_grid,
-        &commit_status,
-        &commit_pal,
-        &commit_base,
-        &commit_session2,
-        &commit_refresh,
-        &commit_listed,
-      );
+      commit_rebuild();
       eprintln!(
         "[finder][rename] commit + rebuild done in {}ms",
         t0.elapsed().as_millis()
@@ -1416,28 +1417,14 @@ fn edit_field(
   });
 
   let cancel_session = session.clone();
-  let cancel_grid = grid.clone();
-  let cancel_status = status.clone();
-  let cancel_pal = *pal;
-  let cancel_base = base.to_path_buf();
-  let cancel_session2 = session.clone();
-  let cancel_refresh = refresh.clone();
-  let cancel_listed = listed.clone();
+  let cancel_rebuild = rebuild.clone();
   let keys = gtk::EventControllerKey::new();
   keys.connect_key_pressed(move |_, key, _, _| {
     if key == gdk4::Key::Escape {
       if let Ok(mut guard) = cancel_session.lock() {
         *guard = None;
       }
-      refresh_grid(
-        &cancel_grid,
-        &cancel_status,
-        &cancel_pal,
-        &cancel_base,
-        &cancel_session2,
-        &cancel_refresh,
-        &cancel_listed,
-      );
+      cancel_rebuild();
       glib::Propagation::Stop
     } else {
       glib::Propagation::Proceed
@@ -1672,45 +1659,73 @@ impl Widget for FinderRoot {
     }
     search_entry.add_css_class("fd-search");
 
-    // Expand the actions row with the search field (or collapse it
-    // back to the icon when already shown). The button callback is
-    // wired directly (main thread), so expanding feels instant.
+    let actions = Toolbar::new()
+      .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
+      .item(ToolbarItem::new("magnifyingglass"));
+    let actions_gtk = actions.to_gtk();
+    // Handles for the in-place swap (last button in the group).
+    // Fallbacks keep the app running if the SDK layout ever
+    // changes; the button then simply stays inert.
+    let mut action_buttons = collect_view_buttons(&actions_gtk);
+    let actions_search_btn = action_buttons.pop().unwrap_or_else(|| {
+      eprintln!("[finder][search] search button not found, search disabled");
+      gtk::Button::new()
+    });
+    let actions_group = actions_search_btn
+      .parent()
+      .and_then(|parent| parent.downcast::<gtk::Box>().ok())
+      .unwrap_or_else(|| {
+        eprintln!("[finder][search] actions group not found, search disabled");
+        gtk::Box::new(gtk::Orientation::Horizontal, 0)
+      });
+    // Search open state, tracked locally: never ask GTK about
+    // widget parents (see popover registry for why).
+    let search_open: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    // Expand swaps the search button with the field in place, so
+    // the glass group grows (or collapse it back to the icon when
+    // already shown). The button callback is wired directly (main
+    // thread), so expanding feels instant.
     let expand_search = {
-      let row_c = toolbar_row.clone();
+      let group_c = actions_group.clone();
+      let btn_c = actions_search_btn.clone();
       let entry_c = search_entry.clone();
+      let open_c = search_open.clone();
       move || {
-        if entry_c.parent().is_none() {
+        if !open_c.get() {
           entry_c.set_text(&search_query());
-          row_c.append(&entry_c);
+          group_c.remove(&btn_c);
+          group_c.append(&entry_c);
           entry_c.grab_focus();
+          open_c.set(true);
           eprintln!("[finder][search] expanded");
         } else {
-          row_c.remove(&entry_c);
+          group_c.remove(&entry_c);
+          group_c.append(&btn_c);
+          open_c.set(false);
           eprintln!("[finder][search] collapsed");
         }
       }
     };
     // Collapse without clearing (clicking away keeps the filter).
     let collapse_search: Rc<dyn Fn()> = Rc::new({
-      let row_c = toolbar_row.clone();
+      let group_c = actions_group.clone();
+      let btn_c = actions_search_btn.clone();
       let entry_c = search_entry.clone();
+      let open_c = search_open.clone();
       move || {
-        if entry_c.parent().is_some() {
-          row_c.remove(&entry_c);
+        if open_c.get() {
+          group_c.remove(&entry_c);
+          group_c.append(&btn_c);
+          open_c.set(false);
           eprintln!("[finder][search] collapsed");
         }
       }
     });
-
-    let actions = Toolbar::new()
-      .item(ToolbarItem::new("square.and.arrow.up").on_click(|| println!("Finder share")))
-      .item(ToolbarItem::new("magnifyingglass"));
-    let actions_gtk = actions.to_gtk();
     // Wire the search button directly (its `on_click` is Send-bound
-    // and must not touch widgets): last button in the group.
-    if let Some(search_btn) = collect_view_buttons(&actions_gtk).pop() {
+    // and must not touch widgets).
+    {
       let expand_c = expand_search;
-      search_btn.connect_clicked(move |_| expand_c());
+      actions_search_btn.connect_clicked(move |_| expand_c());
     }
     toolbar_row.append(&actions_gtk);
     // Escape clears the query and collapses; focus loss collapses
@@ -1975,10 +1990,24 @@ impl Widget for FinderRoot {
 }
 
 /// Status line markup for the current entries.
-fn status_markup(entries: &[model::DirEntry], pal: &Palette) -> String {
+/// Status line markup for the current entries in `base`. The free
+/// space is live (`statvfs`); German uses a decimal comma. Falls
+/// back to the `status.free` placeholder when unknown.
+fn status_markup(entries: &[model::DirEntry], pal: &Palette, base: &std::path::Path) -> String {
+  let free = match model::free_bytes(base) {
+    Some(bytes) => {
+      let text = model::format_size(bytes);
+      if crate::lang::locale() == "de_de" {
+        text.replace('.', ",")
+      } else {
+        text
+      }
+    }
+    None => lang::t("status.free"),
+  };
   let line = lang::t("status.line")
     .replace("{count}", &model::item_count(entries).to_string())
-    .replace("{free}", &lang::t("status.free"));
+    .replace("{free}", &free);
   format!(
     "<span font_desc=\"{} normal 11\" foreground=\"{}\">{}</span>",
     SF_PRO,
@@ -2016,6 +2045,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   session: &SharedSession,
   refresh: &Refresh,
   listed: &Rc<RefCell<Vec<ListedEntry>>>,
+  rebuild: &Rebuild,
 ) {
   let t0 = std::time::Instant::now();
   let mut child = grid.first_child();
@@ -2044,7 +2074,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
   );
   for (index, entry) in entries.iter().enumerate() {
     let t_cell = std::time::Instant::now();
-    grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status, listed), -1);
+    grid.insert(&folder_cell(base, entry, pal, session, refresh, listed, rebuild), -1);
     // Right-click also selects the cell (Finder behavior): a capture
     // gesture on the FlowBoxChild runs before the menu gestures and
     // only selects, so the file menu still opens normally.
@@ -2064,7 +2094,7 @@ fn refresh_grid(  grid: &gtk::FlowBox,
       eprintln!("[finder][refresh] slow cell: {} ({}ms)", entry.name, ms);
     }
   }
-  status.set_markup(&status_markup(&entries, pal));
+  status.set_markup(&status_markup(&entries, pal, base));
   // Column width driver check: FlowBox columns follow the widest
   // child minimum. Expect ~CELL; ~230px means the idle popover (or
   // another wrapper child) still drives the width.

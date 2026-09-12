@@ -274,20 +274,46 @@ fn trim_float(value: f64, decimals: usize) -> String {
 }
 
 /// Human file size like the list view shows: `1 KB`, `23 KB`,
-/// `1.5 MB`, `9.53 GB`, `10 GB`. Kilobytes round up with a 1 KB
-/// minimum; larger units carry trimmed decimals.
+/// `1.5 MB`, `9.53 GB`, `10 GB`, `1.06 TB`. Kilobytes round up with
+/// a 1 KB minimum; larger units carry trimmed decimals.
 pub fn format_size(bytes: u64) -> String {
   const KB: f64 = 1024.0;
   const MB: f64 = 1024.0 * 1024.0;
   const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+  const TB: f64 = 1024.0 * 1024.0 * 1024.0 * 1024.0;
   let value = bytes as f64;
   if value < MB {
     format!("{} KB", (value / KB).ceil().max(1.0) as u64)
   } else if value < GB {
     format!("{} MB", trim_float(value / MB, 1))
-  } else {
+  } else if value < TB {
     format!("{} GB", trim_float(value / GB, 2))
+  } else {
+    format!("{} TB", trim_float(value / TB, 2))
   }
+}
+
+/// Free space of the filesystem holding `path`, in bytes (`None`
+/// when unknown: non-Linux or unreadable path). Linux reads
+/// `statvfs` (`f_bavail`, so reserved root blocks stay excluded).
+#[cfg(target_os = "linux")]
+pub fn free_bytes(path: &Path) -> Option<u64> {
+  use std::ffi::CString;
+  use std::os::unix::ffi::OsStrExt;
+  let cpath = CString::new(path.as_os_str().as_bytes()).ok()?;
+  let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+  if unsafe { libc::statvfs(cpath.as_ptr(), &mut stat) } != 0 {
+    return None;
+  }
+  Some(stat.f_bavail as u64 * stat.f_frsize as u64)
+}
+
+/// Free space of the filesystem holding `path`. Only Linux is
+/// implemented; other systems always yield `None` (the status line
+/// falls back to its placeholder).
+#[cfg(not(target_os = "linux"))]
+pub fn free_bytes(_path: &Path) -> Option<u64> {
+  None
 }
 
 /// Modification date like the list view shows (`12.09.2026 10:05`
@@ -525,6 +551,8 @@ mod tests {
     assert_eq!(format_size(1258291), "1.2 MB");
     assert_eq!(format_size(10 * 1024 * 1024 * 1024), "10 GB");
     assert_eq!(format_size(10233714893), "9.53 GB");
+    assert_eq!(format_size(1024 * 1024 * 1024 * 1024), "1 TB");
+    assert_eq!(format_size(1649267441664), "1.5 TB");
   }
 
   #[test]
@@ -554,6 +582,21 @@ mod tests {
     assert_eq!(dir.len, 0);
     let missing = file_meta(&base, "nope.txt");
     assert_eq!((missing.len, missing.mtime_secs), (0, 0));
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[cfg(target_os = "linux")]
+  #[test]
+  fn free_bytes_reports_live_filesystem() {
+    let base = std::env::temp_dir().join(format!("finder-test-free-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    let free = free_bytes(&base);
+    assert!(free.is_some());
+    assert!(free.unwrap() > 0);
+    assert!(free_bytes(&base.join("nope-missing").join("deep")).is_none());
 
     let _ = std::fs::remove_dir_all(&base);
   }
