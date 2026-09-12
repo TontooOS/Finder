@@ -378,7 +378,9 @@ creating folders/files and the info panel are later steps.
 
 Right-clicking an icon or a name shows a per-file `ContextMenu`
 (`file_menu_entries(name)` in `src/views/finder.rs`,
-`file_menu_wrap()` hugs one widget). Grid cells wrap artwork and
+`file_menu_wrap()` hugs one widget) and selects the item first
+(capture gesture on the cell selects it before the menu opens, like
+Finder). Grid cells wrap artwork and
 label separately, list rows wrap icon plus name; presses anywhere
 else (padding, gaps, date/size columns) fall through to the
 empty-space menu above.

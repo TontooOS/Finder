@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Right-click selects the item first in both views (capture gesture, Finder behavior).
 - 2026-09-12: File menus hug icon and text in both views; padding, gaps and date/size columns open the empty-space menu.
 - 2026-09-12: List view with Name/Date/Size columns, toolbar view switch with select indicator, per-user CoreData persistence (`com.tontoo.finder`).
 - 2026-09-12: Padded all `extensionicons` to a square 192x192 canvas so every document icon renders at equal width and height.

@@ -573,7 +573,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     );
     list.add_css_class("finder-list");
     for entry in &entries {
-      list.append(&list_row(
+      let row = list_row(
         &ctx.base,
         entry,
         &ctx.pal,
@@ -581,7 +581,20 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
         &ctx.session,
         &ctx.refresh,
         rebuild,
-      ));
+      );
+      list.append(&row);
+      // Right-click also selects the row (Finder behavior): a capture
+      // gesture runs before the menu gestures and only selects, so
+      // the file menu still opens normally.
+      let list_c = list.clone();
+      let row_c = row.clone();
+      let press = gtk::GestureClick::new();
+      press.set_button(3);
+      press.set_propagation_phase(gtk::PropagationPhase::Capture);
+      press.connect_pressed(move |_, _, _, _| {
+        list_c.select_row(Some(&row_c));
+      });
+      row.add_controller(press);
     }
     let scroll = gtk::ScrolledWindow::new();
     scroll.set_child(Some(&list));
@@ -1458,9 +1471,23 @@ fn refresh_grid(  grid: &gtk::FlowBox,
     entries.len(),
     t_list.elapsed().as_millis()
   );
-  for entry in &entries {
+  for (index, entry) in entries.iter().enumerate() {
     let t_cell = std::time::Instant::now();
     grid.insert(&folder_cell(base, entry, pal, session, refresh, grid, status), -1);
+    // Right-click also selects the cell (Finder behavior): a capture
+    // gesture on the FlowBoxChild runs before the menu gestures and
+    // only selects, so the file menu still opens normally.
+    if let Some(flow_child) = grid.child_at_index(index as i32) {
+      let grid_c = grid.clone();
+      let child_c = flow_child.clone();
+      let press = gtk::GestureClick::new();
+      press.set_button(3);
+      press.set_propagation_phase(gtk::PropagationPhase::Capture);
+      press.connect_pressed(move |_, _, _, _| {
+        grid_c.select_child(&child_c);
+      });
+      flow_child.add_controller(press);
+    }
     let ms = t_cell.elapsed().as_millis();
     if ms > 20 {
       eprintln!("[finder][refresh] slow cell: {} ({}ms)", entry.name, ms);
