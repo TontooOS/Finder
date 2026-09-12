@@ -44,16 +44,11 @@ type SharedSession = Arc<Mutex<Option<EditSession>>>;
 type Refresh = Arc<dyn Fn() + Send + Sync>;
 
 /// Create a uniquely named folder (`Untitled Folder`, `Untitled
-/// Folder 2`, ...) and return its path.
+/// Folder (2)`, ...) and return its path.
 fn create_folder(base: &std::path::Path) -> Option<std::path::PathBuf> {
   let t0 = std::time::Instant::now();
   let stem = lang::t("folder.untitled");
-  let mut candidate = base.join(&stem);
-  let mut counter = 2;
-  while candidate.exists() {
-    candidate = base.join(format!("{stem} {counter}"));
-    counter += 1;
-  }
+  let candidate = base.join(model::unique_name(base, &stem, true));
   let created = std::fs::create_dir(&candidate);
   eprintln!(
     "[finder][create_folder] create_dir {} ok={} in {}ms",
@@ -65,8 +60,10 @@ fn create_folder(base: &std::path::Path) -> Option<std::path::PathBuf> {
   Some(candidate)
 }
 
-/// Commit an inline rename. Returns true on success (caller refreshes);
-/// on failure the session stays active so the name can be fixed.
+/// Commit an inline rename. Taken names count up (`Docs (2)`,
+/// `wallpaper (2).png`) instead of failing; returns true on
+/// success (caller refreshes). On invalid input the session stays
+/// active so the name can be fixed.
 fn commit_rename(base: &std::path::Path, entry: &model::DirEntry, typed: &str) -> bool {
   let t0 = std::time::Instant::now();
   let Some(new_name) = model::resolve_new_name(entry, typed) else {
@@ -76,19 +73,13 @@ fn commit_rename(base: &std::path::Path, entry: &model::DirEntry, typed: &str) -
     );
     return false;
   };
-  let target = base.join(&new_name);
-  if target.exists() {
-    eprintln!(
-      "[finder][commit_rename] target exists: {}",
-      target.display()
-    );
-    return false;
-  }
+  let unique = model::unique_name(base, &new_name, entry.is_dir);
+  let target = base.join(&unique);
   let ok = std::fs::rename(base.join(&entry.name), &target).is_ok();
   eprintln!(
     "[finder][commit_rename] {} -> {} ok={} in {}ms",
     entry.name,
-    new_name,
+    unique,
     ok,
     t0.elapsed().as_millis()
   );

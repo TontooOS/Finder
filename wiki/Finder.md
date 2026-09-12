@@ -149,9 +149,24 @@ unless the typed text already carries one.
 pub fn create_folder(base: &Path) -> Option<PathBuf>
 ```
 
-Creates a uniquely named folder (`folder.untitled`, numbered when
-taken). Found in `src/views/finder.rs`; the caller opens inline
-rename on the result.
+Creates a uniquely named folder (`folder.untitled`,
+`folder.untitled (2)`, ... via `unique_name`). Found in
+`src/views/finder.rs`; the caller opens inline rename on the
+result.
+
+### `unique_name`
+
+```rust
+pub fn unique_name(base: &Path, desired: &str, is_dir: bool) -> String
+```
+
+Free variant of a desired on-disk name: `desired` when unused,
+else `stem (2)`, `stem (3)`, ... The counter goes before the file
+extension (`wallpaper (2).png`), at the very end for directories
+(`Docs (2)`), and before the `.app` suffix for bundles
+(`Demo (2).app`). Leading-dot names never split an extension.
+Used by both rename commit and folder creation, so taken names
+count up instead of failing.
 
 ### `list_dir`
 

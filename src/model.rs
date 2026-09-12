@@ -186,6 +186,42 @@ pub fn item_count(entries: &[DirEntry]) -> usize {
   entries.len()
 }
 
+/// Free variant of a desired on-disk name: returns `desired` when
+/// unused, else `stem (2)`, `stem (3)`, ... The counter goes before
+/// the file extension (`wallpaper (2).png`), at the very end for
+/// directories (`Docs (2)`), and before the `.app` suffix for
+/// bundles (`Demo (2).app`). Leading-dot names (`.gitignore`) never
+/// split an extension.
+pub fn unique_name(base: &Path, desired: &str, is_dir: bool) -> String {
+  if !base.join(desired).exists() {
+    return desired.to_string();
+  }
+  let lower = desired.to_lowercase();
+  let (stem, ext) = if is_dir && lower.ends_with(".app") {
+    let cut = desired.len() - 4;
+    (desired[..cut].to_string(), desired[cut..].to_string())
+  } else if !is_dir {
+    match desired.rfind('.') {
+      Some(i) if i > 0 => (desired[..i].to_string(), desired[i..].to_string()),
+      _ => (desired.to_string(), String::new()),
+    }
+  } else {
+    (desired.to_string(), String::new())
+  };
+  let mut counter = 2;
+  loop {
+    let candidate = if ext.is_empty() {
+      format!("{stem} ({counter})")
+    } else {
+      format!("{stem} ({counter}){ext}")
+    };
+    if !base.join(&candidate).exists() {
+      return candidate;
+    }
+    counter += 1;
+  }
+}
+
 /// Size plus mtime of one entry for the list view columns.
 pub struct FileMeta {
   /// File size in bytes. Always 0 for directories (the list shows
@@ -505,6 +541,39 @@ mod tests {
     assert_eq!(dir.len, 0);
     let missing = file_meta(&base, "nope.txt");
     assert_eq!((missing.len, missing.mtime_secs), (0, 0));
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn unique_name_numbers_collisions() {
+    let base = std::env::temp_dir().join(format!("finder-test-unique-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    // Free names pass through untouched.
+    assert_eq!(unique_name(&base, "Docs", true), "Docs");
+    assert_eq!(unique_name(&base, "wallpaper.png", false), "wallpaper.png");
+
+    // Directories count up at the end.
+    std::fs::create_dir_all(base.join("Docs")).unwrap();
+    assert_eq!(unique_name(&base, "Docs", true), "Docs (2)");
+    std::fs::create_dir_all(base.join("Docs (2)")).unwrap();
+    assert_eq!(unique_name(&base, "Docs", true), "Docs (3)");
+
+    // Files keep their extension.
+    std::fs::write(base.join("wallpaper.png"), b"x").unwrap();
+    assert_eq!(unique_name(&base, "wallpaper.png", false), "wallpaper (2).png");
+    std::fs::write(base.join("wallpaper (2).png"), b"x").unwrap();
+    assert_eq!(unique_name(&base, "wallpaper.png", false), "wallpaper (3).png");
+
+    // Bundles keep their suffix.
+    std::fs::create_dir_all(base.join("Demo.app")).unwrap();
+    assert_eq!(unique_name(&base, "Demo.app", true), "Demo (2).app");
+
+    // Leading-dot names never split an extension.
+    std::fs::write(base.join(".gitignore"), b"x").unwrap();
+    assert_eq!(unique_name(&base, ".gitignore", false), ".gitignore (2)");
 
     let _ = std::fs::remove_dir_all(&base);
   }
