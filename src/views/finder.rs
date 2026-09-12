@@ -755,29 +755,39 @@ impl Widget for FinderRoot {
 
     // Live updates: the notify watcher and the menu/edit refresh
     // signal share one 400ms main-thread tick that drains bursts and
-    // rebuilds the grid once.
+    // rebuilds the grid once per real change. The watcher also fires
+    // on plain file opens (every rebuild opens files), so a metadata
+    // snapshot gates the rebuild: without it the refresh retriggers
+    // itself and starves the UI.
     let watch_rx = crate::watch::watch_dir(&base).map(|(watcher, rx)| {
       FOLDER_WATCHER.with(|slot| *slot.borrow_mut() = Some(watcher));
       rx
     });
     let session_tick = session.clone();
+    let mut last_snapshot = model::snapshot(&base);
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
-      let mut dirty = false;
+      let mut signaled = false;
       if let Some(rx) = &watch_rx {
         while rx.try_recv().is_ok() {
-          if watch_refresh_allowed(&session_tick) {
-            dirty = true;
-          } else {
-            // Drop watcher bursts during inline rename; the edit
-            // commit refreshes explicitly.
-          }
+          signaled = true;
         }
       }
       while refresh_rx.try_recv().is_ok() {
-        dirty = true;
+        signaled = true;
       }
-      if dirty {
-        do_refresh();
+      if signaled {
+        if watch_refresh_allowed(&session_tick) {
+          let current = model::snapshot(&base);
+          if current != last_snapshot {
+            last_snapshot = current;
+            do_refresh();
+          }
+        } else {
+          // Drop watcher bursts during inline rename; the edit
+          // commit refreshes explicitly. Menu signals still rebuild:
+          // their filesystem change lands in the snapshot.
+          do_refresh();
+        }
       }
       glib::ControlFlow::Continue
     });

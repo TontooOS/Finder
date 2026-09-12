@@ -233,6 +233,18 @@ in sync with the folder. Watcher rebuilds pause while an inline
 rename is open (`watch_refresh_allowed`); menu and edit signals
 always rebuild. Returns `None` when watching fails.
 
+### `snapshot`
+
+```rust
+pub fn snapshot(path: &Path) -> Vec<SnapshotEntry>
+```
+
+Sorted metadata snapshot (name, kind, size, mtime seconds) for
+change detection. The watcher also fires on plain file opens, and
+every grid rebuild opens files (image decodes, icon cache checks):
+rebuilding on those would retrigger itself forever and starve the
+main thread, so the tick only rebuilds when this snapshot differs.
+
 ## Empty-space context menu
 
 Right-clicking empty grid space shows a TontooUI `ContextMenu`

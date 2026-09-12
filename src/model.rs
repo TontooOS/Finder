@@ -186,6 +186,55 @@ pub fn item_count(entries: &[DirEntry]) -> usize {
   entries.len()
 }
 
+/// Cheap metadata snapshot of a directory for change detection.
+/// Used by the refresh tick: the watcher also fires on plain file
+/// opens/closes (notify watches `OPEN`), and every grid rebuild opens
+/// files (image decodes, icon cache checks). Rebuilding on those
+/// would retrigger itself forever and starve the main thread, so the
+/// UI only rebuilds when this snapshot actually differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotEntry {
+  pub name: String,
+  pub is_dir: bool,
+  pub len: u64,
+  pub mtime_secs: u64,
+}
+
+/// Sorted metadata snapshot (Zone.Identifier markers excluded like in
+/// the listing). Missing or unreadable directories yield an empty
+/// snapshot.
+pub fn snapshot(path: &Path) -> Vec<SnapshotEntry> {
+  let Ok(read) = std::fs::read_dir(path) else {
+    return Vec::new();
+  };
+  let mut entries: Vec<SnapshotEntry> = read
+    .filter_map(|entry| entry.ok())
+    .map(|entry| {
+      let name = entry.file_name().to_string_lossy().into_owned();
+      (entry, name)
+    })
+    .filter(|(_, name)| {
+      let lower = name.to_lowercase();
+      !lower.ends_with(".zone.identifier") && !lower.contains(":zone.identifier")
+    })
+    .map(|(entry, name)| {
+      let meta = entry.metadata().ok();
+      SnapshotEntry {
+        is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
+        len: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+        mtime_secs: meta
+          .and_then(|m| m.modified().ok())
+          .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+          .map(|d| d.as_secs())
+          .unwrap_or(0),
+        name,
+      }
+    })
+    .collect();
+  entries.sort_by(|a, b| a.name.cmp(&b.name));
+  entries
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -323,6 +372,26 @@ mod tests {
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "wallpaper.jpg");
     assert_eq!(entries[0].ext, "jpg");
+
+    let _ = std::fs::remove_dir_all(&base);
+  }
+
+  #[test]
+  fn snapshot_tracks_real_changes_only() {
+    let base = std::env::temp_dir().join(format!("finder-test-snap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("a.txt"), b"x").unwrap();
+
+    let first = snapshot(&base);
+    // Repeat reads (like a grid rebuild) must not change it.
+    let _ = std::fs::read(base.join("a.txt")).unwrap();
+    assert_eq!(snapshot(&base), first);
+
+    std::fs::write(base.join("b.txt"), b"y").unwrap();
+    assert_ne!(snapshot(&base), first);
+    std::fs::remove_file(base.join("b.txt")).unwrap();
+    assert_eq!(snapshot(&base), first);
 
     let _ = std::fs::remove_dir_all(&base);
   }
