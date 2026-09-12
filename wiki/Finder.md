@@ -535,12 +535,28 @@ Returns the entry count. Used by the status line.
 ## Status line
 
 The bottom row shows one centered 11px secondary label built from
-`status.line` with `{count}` and `{free}` replaced:
+`status.line` with `{count}` and `{free}` replaced. The count
+follows the active view (filtered entries while searching); the
+free space is live from `statvfs` (`model::free_bytes`, available
+blocks times block size), formatted like list sizes with a decimal
+comma in German:
 
 | Key | en_us | de_de |
 |---|---|---|
 | `status.line` | `{count} items, {free} available` | `{count} Objekte, {free} verfügbar` |
-| `status.free` | `1.06 TB` | `1,06 TB` |
+| `status.free` | fallback placeholder | fallback placeholder |
+
+`status.free` only shows when the free space is unknown (non-Linux
+or unreadable path).
+
+### `free_bytes`
+
+```rust
+pub fn free_bytes(path: &Path) -> Option<u64>
+```
+
+Free space of the filesystem holding `path`, in bytes. Linux-only;
+other systems yield `None`.
 
 ## Colors
 
