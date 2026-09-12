@@ -277,6 +277,35 @@ fn popdown_all_menus() {
   });
 }
 
+/// Current active state of the application window, if present.
+/// Scans `gtk::Window::list_toplevels()` for the first
+/// `gtk::ApplicationWindow` (fallback: plain `gtk::Window`) and
+/// returns `is_active()`. Returns `None` when no window exists
+/// (for example in headless tests). Cheap enough for the 400ms
+/// tick; callers stay quiet when the value is unchanged.
+fn app_window_active() -> Option<bool> {
+  let tops = gtk::Window::list_toplevels();
+  for top in &tops {
+    if let Ok(win) = top.clone().downcast::<gtk::ApplicationWindow>() {
+      let win: gtk::Window = win.upcast();
+      return Some(win.is_active());
+    }
+  }
+  for top in &tops {
+    if let Ok(win) = top.clone().downcast::<gtk::Window>() {
+      return Some(win.is_active());
+    }
+  }
+  None
+}
+
+/// True when a previous active state exists and differs from the
+/// current one (flip in either direction). Returns false on the
+/// first observation (`None`), so startup never dismisses menus.
+fn active_flipped(prev: Option<bool>, current: bool) -> bool {
+  matches!(prev, Some(p) if p != current)
+}
+
 /// Dismiss one popover plus nested submenu popovers (child first),
 /// then hide explicitly: popdown alone does not remove every
 /// visible surface, leaving dead windows behind.
@@ -1444,7 +1473,21 @@ impl Widget for FinderRoot {
     refresh_content(&ctx, &rebuild_all);
     let rebuild_tick = rebuild_all.clone();
     let mode_tick = mode_state.clone();
+    let mut last_active: Option<bool> = None;
     glib::timeout_add_local(std::time::Duration::from_millis(400), move || {
+      // Focus change dismisses menus: presses outside our widget
+      // hierarchy never reach our gestures and GTK autohide does not
+      // engage for the parented popovers, so a flip of the main
+      // window active state in either direction pops everything
+      // down. Runs before the early return so a lone focus change
+      // (no watcher/menu/view signal) still closes menus.
+      if let Some(current) = app_window_active() {
+        if active_flipped(last_active, current) {
+          eprintln!("[finder][menu] window active changed -> {current}");
+          popdown_all_menus();
+        }
+        last_active = Some(current);
+      }
       let mut watch_signaled = false;
       if let Some(rx) = &watch_rx {
         while rx.try_recv().is_ok() {
@@ -1709,5 +1752,18 @@ mod tests {
     assert!(tick_should_rebuild(true, false, true));
     assert!(tick_should_rebuild(true, true, true));
     assert!(!tick_should_rebuild(true, false, false));
+  }
+
+  #[test]
+  fn active_flip_matrix() {
+    // First observation never counts as a flip (no dismiss on startup).
+    assert!(!active_flipped(None, true));
+    assert!(!active_flipped(None, false));
+    // Either direction flips (focus lost or regained).
+    assert!(active_flipped(Some(true), false));
+    assert!(active_flipped(Some(false), true));
+    // Unchanged states stay quiet.
+    assert!(!active_flipped(Some(true), true));
+    assert!(!active_flipped(Some(false), false));
   }
 }

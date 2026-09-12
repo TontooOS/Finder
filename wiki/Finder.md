@@ -383,6 +383,13 @@ and rebuilds dismiss all menus explicitly
 (`popdown_all_menus`), since GTK autohide does not reliably close
 these parented popovers. Presses inside an open menu never reach
 the window (separate popup surface), so menu use is unaffected.
+Presses outside the window never reach these gestures either, so
+the 400ms main-thread tick also polls the application window
+active state (`app_window_active` via `list_toplevels` plus
+`ApplicationWindow::is_active`); any flip in either direction
+dismisses all menus (`popdown_all_menus`) and logs
+`[finder][menu] window active changed -> {bool}`. The check is
+cheap and quiet (no log when unchanged).
 
 | Order | Entry |
 |---|---|
@@ -396,6 +403,40 @@ Each icon and each name carries its own `ContextMenu` (see
 below); their inner gestures claim the press first, so this menu
 stays hidden over icons and text. All actions log for now;
 creating folders/files and the info panel are later steps.
+
+### `popdown_all_menus`
+
+```rust
+fn popdown_all_menus()
+```
+
+Dismisses every registered context-menu popover (plus nested
+submenu popovers via `popdown_tree`). Called on presses inside
+the window, selection changes, view switches, rebuilds, and
+window active flips. Logs a toplevel census only when a menu was
+open or a stray toplevel exists.
+
+### `app_window_active`
+
+```rust
+fn app_window_active() -> Option<bool>
+```
+
+Current active state of the application window (`true` when
+focused). Scans `gtk::Window::list_toplevels()` for the first
+`gtk::ApplicationWindow` (fallback: plain `gtk::Window`) and
+returns `is_active()`. Returns `None` when no window exists (for
+example in headless tests).
+
+### `active_flipped`
+
+```rust
+fn active_flipped(prev: Option<bool>, current: bool) -> bool
+```
+
+True when a previous active state exists and differs from the
+current one (flip in either direction). Returns `false` on the
+first observation (`None`), so startup never dismisses menus.
 
 ## File context menu
 
@@ -557,6 +598,7 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 | `[finder][preview]` | Image decode time per photo (in-memory fallback) |
 | `[finder][photo]` | Preview cache generation time per photo (once) |
 | `[finder][icons]` | Icon file load time (once per file, then shared) |
+| `[finder][menu]` | Menu dismissals, toplevel census, window active flips |
 | `[finder][view]` | View button clicks, mode switches and toolbar button count |
 | `[finder][video]` | Frame extraction time per video |
 | `[finder][app_icon]` | Cache hit or CoreIcon render time per `.app` |
