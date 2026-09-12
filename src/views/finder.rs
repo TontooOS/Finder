@@ -1632,6 +1632,8 @@ impl Widget for FinderRoot {
 
     let grid = gtk::FlowBox::new();
     grid.set_selection_mode(gtk::SelectionMode::Single);
+    // Single click only selects; folders open on double-click (or Enter).
+    grid.set_activate_on_single_click(false);
     grid.set_homogeneous(true);
     grid.set_min_children_per_line(4);
     grid.set_max_children_per_line(8);

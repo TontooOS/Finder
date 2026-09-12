@@ -63,7 +63,7 @@ filtering is a later step.
 ## Navigation
 
 Double-click (or Enter) on a folder opens it in both views;
-single-click only selects. `chevron.backward` and
+single-click only selects (`activate-on-single-click` is off). `chevron.backward` and
 `chevron.forward` walk the back/forward history (empty stacks are
 a no-op). The title shows the current folder name, the status line
 its item count, and the `notify` watcher follows along
