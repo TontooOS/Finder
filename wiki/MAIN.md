@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Dismiss menus on any press inside the window (capture gestures); census logging only when a menu was open.
 - 2026-09-12: Dismiss all menus explicitly on selection change, view switch and rebuild (`popdown_all_menus` registry).
 - 2026-09-12: Removed the sidebar search field (`.no_search()`).
 - 2026-09-12: Right-click selects the item first in both views (capture gesture, Finder behavior).

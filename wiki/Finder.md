@@ -362,9 +362,12 @@ Right-clicking empty space shows a TontooUI `ContextMenu`
 cell padding around icon and text, and (in the list view) the gap
 plus the date and size columns. Left-click selection is unaffected.
 Every wrapper popover registers in a thread-local list
-(`OPEN_MENUS`); selection changes, view switches and rebuilds
-dismiss all menus explicitly (`popdown_all_menus`), since GTK
-autohide does not reliably close these parented popovers.
+(`OPEN_MENUS`); any press inside the window (capture gestures on
+the root, both mouse buttons), selection changes, view switches
+and rebuilds dismiss all menus explicitly
+(`popdown_all_menus`), since GTK autohide does not reliably close
+these parented popovers. Presses inside an open menu never reach
+the window (separate popup surface), so menu use is unaffected.
 
 | Order | Entry |
 |---|---|

@@ -238,9 +238,11 @@ thread_local! {
     RefCell::new(Vec::new());
 }
 
-/// Dismiss every known context menu. Called on selection changes,
-/// view switches and rebuilds, so a menu never survives the action
-/// or selection that follows it.
+/// Dismiss every known context menu. Called on any press inside
+/// our window, on selection changes, view switches and rebuilds,
+/// so a menu never survives the action or selection that follows
+/// it. Only logs when something was actually open (or a stray
+/// toplevel exists); the quiet path runs on every click.
 fn popdown_all_menus() {
   OPEN_MENUS.with(|slot| {
     let mut guard = slot.borrow_mut();
@@ -262,22 +264,24 @@ fn popdown_all_menus() {
     // a stuck-but-dead menu shows up here even when its widgets are
     // gone. Baseline is 1 (the main window).
     let tops = gtk::Window::list_toplevels();
-    eprintln!(
-      "[finder][menu] popdown_all: registry_live={live} was_open={open} toplevels={}",
-      tops.len()
-    );
-    for top in &tops {
-      let title = top
-        .clone()
-        .downcast::<gtk::Window>()
-        .ok()
-        .and_then(|w| w.title().map(|s| s.to_string()));
+    if open > 0 || tops.len() > 1 {
       eprintln!(
-        "[finder][menu]   top visible={} title={title:?} type={} name={}",
-        top.is_visible(),
-        top.type_().name(),
-        top.widget_name()
+        "[finder][menu] popdown_all: registry_live={live} was_open={open} toplevels={}",
+        tops.len()
       );
+      for top in &tops {
+        let title = top
+          .clone()
+          .downcast::<gtk::Window>()
+          .ok()
+          .and_then(|w| w.title().map(|s| s.to_string()));
+        eprintln!(
+          "[finder][menu]   top visible={} title={title:?} type={} name={}",
+          top.is_visible(),
+          top.type_().name(),
+          top.widget_name()
+        );
+      }
     }
   });
 }
@@ -1241,6 +1245,20 @@ impl Widget for FinderRoot {
       &format!(".finder {{ background-color: {}; }}", pal.bg),
     );
     outer.add_css_class("finder");
+
+    // Any press inside our window dismisses open menus first (GTK
+    // autohide does not engage for the parented popovers). Capture
+    // phase runs before the menu gestures; presses inside an open
+    // menu never reach us (separate popup surface), so menu use is
+    // unaffected. Neither gesture claims, so selection and menus
+    // keep working normally afterwards.
+    for button in [1u32, 3u32] {
+      let dismiss = gtk::GestureClick::new();
+      dismiss.set_button(button);
+      dismiss.set_propagation_phase(gtk::PropagationPhase::Capture);
+      dismiss.connect_pressed(|_, _, _, _| popdown_all_menus());
+      outer.add_controller(dismiss);
+    }
 
     let sidebar = Sidebar::new()
       .section(lang::t("sidebar.favourites"))
