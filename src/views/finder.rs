@@ -245,13 +245,43 @@ fn popdown_all_menus() {
   OPEN_MENUS.with(|slot| {
     slot.borrow_mut().retain(|weak| {
       if let Some(pop) = weak.upgrade() {
-        pop.popdown();
+        popdown_tree(&pop);
         true
       } else {
         false
       }
     });
   });
+}
+
+/// Dismiss one popover plus nested submenu popovers (child first),
+/// then hide explicitly: popdown alone does not remove every
+/// visible surface, leaving dead windows behind.
+fn popdown_tree(pop: &gtk::Popover) {
+  fn walk(node: &gtk::Widget) {
+    let mut cursor = node.first_child();
+    while let Some(widget) = cursor {
+      cursor = widget.next_sibling();
+      if let Ok(child) = widget.clone().downcast::<gtk::Popover>() {
+        walk(&child.clone().upcast());
+        child.popdown();
+        child.set_visible(false);
+      } else {
+        walk(&widget);
+      }
+    }
+  }
+  let before = pop.is_visible();
+  let root: gtk::Widget = pop.clone().upcast();
+  walk(&root);
+  pop.popdown();
+  pop.set_visible(false);
+  if before {
+    eprintln!(
+      "[finder][menu] dismissed open menu, visible_after={}",
+      pop.is_visible()
+    );
+  }
 }
 
 /// Wrap one widget (icon or text) with the per-file context menu.
