@@ -77,7 +77,8 @@ so the actions glass group grows (`detail.search` placeholder).
 Every keystroke filters the current folder live by name in both
 views (`.txt` matches all text files); only names are searched,
 never contents. Clicking away collapses back to the icon and keeps
-the filter; Escape clears it. The open state is tracked locally
+the filter; Escape clears it. Swaps run as idle callbacks (never
+mutate the toolbar mid-emission). The open state is tracked locally
 (never a GTK parent query). No match shows `search.empty`
 (`Keine Treffer`) instead of the folder-empty text, and the status
 count follows the filtered entries.

@@ -1684,26 +1684,35 @@ impl Widget for FinderRoot {
     // Expand swaps the search button with the field in place, so
     // the glass group grows (or collapse it back to the icon when
     // already shown). The button callback is wired directly (main
-    // thread), so expanding feels instant.
+    // thread), so expanding feels instant. Structural swaps run as
+    // idle callbacks: mutating the group mid-emission (clicked /
+    // focus-leave) trips `gtk_widget_get_parent` criticals.
     let expand_search = {
       let group_c = actions_group.clone();
       let btn_c = actions_search_btn.clone();
       let entry_c = search_entry.clone();
       let open_c = search_open.clone();
       move || {
-        if !open_c.get() {
-          entry_c.set_text(&search_query());
-          group_c.remove(&btn_c);
-          group_c.append(&entry_c);
-          entry_c.grab_focus();
-          open_c.set(true);
-          eprintln!("[finder][search] expanded");
-        } else {
-          group_c.remove(&entry_c);
-          group_c.append(&btn_c);
-          open_c.set(false);
-          eprintln!("[finder][search] collapsed");
-        }
+        let group_c = group_c.clone();
+        let btn_c = btn_c.clone();
+        let entry_c = entry_c.clone();
+        let open_c = open_c.clone();
+        glib::idle_add_local(move || {
+          if !open_c.get() {
+            entry_c.set_text(&search_query());
+            group_c.remove(&btn_c);
+            group_c.append(&entry_c);
+            entry_c.grab_focus();
+            open_c.set(true);
+            eprintln!("[finder][search] expanded");
+          } else {
+            group_c.remove(&entry_c);
+            group_c.append(&btn_c);
+            open_c.set(false);
+            eprintln!("[finder][search] collapsed");
+          }
+          glib::ControlFlow::Break
+        });
       }
     };
     // Collapse without clearing (clicking away keeps the filter).
@@ -1713,12 +1722,19 @@ impl Widget for FinderRoot {
       let entry_c = search_entry.clone();
       let open_c = search_open.clone();
       move || {
-        if open_c.get() {
-          group_c.remove(&entry_c);
-          group_c.append(&btn_c);
-          open_c.set(false);
-          eprintln!("[finder][search] collapsed");
-        }
+        let group_c = group_c.clone();
+        let btn_c = btn_c.clone();
+        let entry_c = entry_c.clone();
+        let open_c = open_c.clone();
+        glib::idle_add_local(move || {
+          if open_c.get() {
+            group_c.remove(&entry_c);
+            group_c.append(&btn_c);
+            open_c.set(false);
+            eprintln!("[finder][search] collapsed");
+          }
+          glib::ControlFlow::Break
+        });
       }
     });
     // Wire the search button directly (its `on_click` is Send-bound

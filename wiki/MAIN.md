@@ -34,6 +34,7 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-12: Search swaps run as idle callbacks (no toolbar mutation mid-emission, no `get_parent` criticals).
 - 2026-09-12: Status line shows live free space (`statvfs`) with German decimal comma, `status.free` as fallback.
 - 2026-09-12: Track popover parents with local flags (never GTK queries); rename commit/cancel rebuild via the shared handle.
 - 2026-09-12: Toolbar search with live name filtering, collapse-keeps-filter, Escape clears, no-match empty state.
