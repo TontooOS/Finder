@@ -405,6 +405,147 @@ fn attach_menu_background_dismiss(pop: &gtk::Popover) {
   }
 }
 
+/// True when the press at window-relative `(x, y)` landed inside `target`.
+/// Anything else — another widget or empty space with no picked widget —
+/// counts as outside.
+fn press_inside_target(
+  gesture: &gtk::GestureClick,
+  target: &gtk::Widget,
+  x: f64,
+  y: f64,
+) -> bool {
+  let picked = gesture
+    .widget()
+    .and_then(|root| root.pick(x, y, gtk::PickFlags::DEFAULT));
+  let mut node = picked;
+  while let Some(widget) = node {
+    if widget == *target {
+      return true;
+    }
+    node = widget.parent();
+  }
+  false
+}
+
+/// Attach the window capture gesture for one attached widget. Returns false
+/// when no toplevel window exists yet (caller retries once idle).
+fn attach_window_click_away(target: &gtk::Widget) -> bool {
+  let Some(root) = target.root() else {
+    return false;
+  };
+  let Ok(window) = root.downcast::<gtk::Window>() else {
+    return false;
+  };
+  let weak_f = target.downgrade();
+  let weak_w = window.downgrade();
+  let press = gtk::GestureClick::new();
+  // Button 0 = any mouse button: left/right/middle all deselect.
+  press.set_button(0);
+  press.set_propagation_phase(gtk::PropagationPhase::Capture);
+  press.connect_pressed(move |gesture, _, x, y| {
+    let Some(field) = weak_f.upgrade() else {
+      return;
+    };
+    if !field.has_focus() {
+      return;
+    }
+    if press_inside_target(gesture, &field, x, y) {
+      return;
+    }
+    if let Ok(entry) = field.clone().downcast::<gtk::Entry>() {
+      entry.select_region(0, 0);
+    }
+      if let Some(win) = weak_w.upgrade() {
+        gtk::prelude::GtkWindowExt::set_focus(&win, None::<&gtk::Widget>);
+      }
+  });
+  let press_handle = press.clone();
+  window.add_controller(press);
+  // The controller lives on the window while grid/list rows are rebuilt;
+  // the weak target keeps it a no-op after teardown, and unrealize removes
+  // it so repeated realizes never pile up.
+  let win_c = window.downgrade();
+  target.connect_unrealize(move |_| {
+    if let Some(win) = win_c.upgrade() {
+      win.remove_controller(&press_handle);
+    }
+  });
+  true
+}
+
+/// Click-away deselect for any focused widget (rename `gtk::Entry`,
+/// `gtk::SearchEntry`, ...): a capture-phase gesture on the toplevel window
+/// sees every press — including clicks on empty boxes, labels or padding
+/// that GTK would otherwise leave focused. Presses inside the widget are
+/// ignored; everything else clears the selection (entries) and drops window
+/// focus, which routes through the widget's focus-leave handler
+/// (rename commits, search collapses).
+fn install_entry_click_away(widget: &gtk::Widget) {
+  // Realize-time install: the window exists once the widget is attached.
+  // Built-before-append widgets retry once idle.
+  let pending = widget.downgrade();
+  widget.connect_realize(move |field| {
+    if attach_window_click_away(&field.clone().upcast()) {
+      return;
+    }
+    let pending_c = pending.clone();
+    glib::idle_add_local_once(move || {
+      if let Some(target) = pending_c.upgrade() {
+        attach_window_click_away(&target);
+      }
+    });
+  });
+}
+
+/// Focus-leave commit for inline rename entries: Tab, click-away deselect
+/// (see `install_entry_click_away`) or any other focus loss commits like
+/// Enter. Guarded by the rename session and the mapped state so Escape
+/// (session cleared) and teardown never commit twice.
+/// Pure guard, unit-tested below.
+fn should_commit_on_focus_loss(session_active_for_path: bool, mapped: bool) -> bool {
+  session_active_for_path && mapped
+}
+
+fn install_rename_focus_commit(
+  field: &gtk::Entry,
+  base: &std::path::Path,
+  disk_name: &str,
+  session: &SharedSession,
+) {
+  let expected = base.join(disk_name);
+  let weak = field.downgrade();
+  let guard = session.clone();
+  let focus = gtk::EventControllerFocus::new();
+  focus.connect_leave(move |_| {
+    let Some(entry) = weak.upgrade() else {
+      return;
+    };
+    let active = guard
+      .lock()
+      .map(|slot| {
+        slot
+          .as_ref()
+          .map(|edit| edit.path == expected)
+          .unwrap_or(false)
+      })
+      .unwrap_or(false);
+    if !should_commit_on_focus_loss(active, entry.is_mapped()) {
+      return;
+    }
+    let entry_c = entry.clone();
+    // Idle: the press/collapse emission that moved focus must finish
+    // first; mutating the grid mid-emission trips `gtk_widget_get_parent`
+    // criticals.
+    glib::idle_add_local_once(move || {
+      if entry_c.is_mapped() {
+        eprintln!("[finder][rename] focus lost -> commit");
+        entry_c.activate();
+      }
+    });
+  });
+  field.add_controller(focus);
+}
+
 /// Wrap one widget (icon or text) with the per-file context menu.
 /// The menu hugs content: presses on cell padding, row gaps or the
 /// date/size columns fall through to the empty-space menu below,
@@ -868,6 +1009,11 @@ fn list_edit_field(
     }
   });
   field.add_controller(keys);
+
+  // Click anywhere else (even empty space) or Tab commits like Enter;
+  // Escape stays cancel-only via the session guard.
+  install_rename_focus_commit(&field, base, &entry.name, session);
+  install_entry_click_away(&field.clone().upcast());
 
   field
 }
@@ -1443,6 +1589,11 @@ fn edit_field(
   });
   field.add_controller(keys);
 
+  // Click anywhere else (even empty space) or Tab commits like Enter;
+  // Escape stays cancel-only via the session guard.
+  install_rename_focus_commit(&field, base, &entry.name, session);
+  install_entry_click_away(&field.clone().upcast());
+
   field
 }
 
@@ -1804,7 +1955,9 @@ impl Widget for FinderRoot {
     }
     toolbar_row.append(&actions_gtk);
     // Escape clears the query and collapses; focus loss collapses
-    // and keeps the filter.
+    // and keeps the filter. Clicking anywhere else (even empty space)
+    // deselects through the window capture gesture, which drops focus
+    // and routes here.
     {
       let entry_c = search_entry.clone();
       let collapse_c = collapse_search.clone();
@@ -1822,6 +1975,7 @@ impl Widget for FinderRoot {
       let focus = gtk::EventControllerFocus::new();
       focus.connect_leave(move |_| collapse_search());
       search_entry.add_controller(focus);
+      install_entry_click_away(&search_entry.clone().upcast());
     }
 
     detail.append(&toolbar_row);
@@ -2341,5 +2495,16 @@ mod tests {
     // Unchanged states stay quiet.
     assert!(!active_flipped(Some(true), true));
     assert!(!active_flipped(Some(false), false));
+  }
+
+  #[test]
+  fn focus_loss_commit_matrix() {
+    // Click-away / Tab commits only while the session still points at this
+    // path and the field is mapped. Escape clears the session (no commit),
+    // teardown unmaps the field (no double commit).
+    assert!(should_commit_on_focus_loss(true, true));
+    assert!(!should_commit_on_focus_loss(false, true));
+    assert!(!should_commit_on_focus_loss(true, false));
+    assert!(!should_commit_on_focus_loss(false, false));
   }
 }

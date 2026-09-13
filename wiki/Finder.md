@@ -90,8 +90,12 @@ The magnifying glass swaps itself with a search field in place,
 so the actions glass group grows (`detail.search` placeholder).
 Every keystroke filters the current folder live by name in both
 views (`.txt` matches all text files); only names are searched,
-never contents. Clicking away collapses back to the icon and keeps
-the filter; Escape clears it. Swaps run as idle callbacks (never
+never contents. Clicking anywhere else — another widget or empty
+space — deselects through a capture-phase window gesture
+(`install_entry_click_away`): presses inside the field are ignored,
+everything else drops window focus, which routes through focus loss
+and collapses back to the icon while keeping the filter; Escape
+clears it. Swaps run as idle callbacks (never
 mutate the toolbar mid-emission). The field slides in/out through
 a `GtkRevealer` (200ms); the button returns after the slide-out.
 The open state is tracked locally
@@ -513,6 +517,43 @@ press and only pops down when it is not inside a `GtkButton`.
 Button presses pass through to their actions. Attached to every
 registered popover, so menu-unselect never touches Finder state.
 
+### `install_entry_click_away`
+
+```rust
+fn install_entry_click_away(widget: &gtk::Widget)
+```
+
+Click-away deselect for rename entries and the search field: a
+capture-phase `GestureClick` (any mouse button) on the toplevel
+window hit-tests with `pick`, so clicks on empty boxes, labels or
+padding deselect just like focusable widgets do. Presses inside the
+widget are ignored; everything else clears the entry selection and
+drops window focus, which routes through focus loss (rename commits,
+search collapses). Controllers are removed on unrealize and built
+before append via a one-time idle retry.
+
+### `install_rename_focus_commit`
+
+```rust
+fn install_rename_focus_commit(field: &gtk::Entry, base: &Path, disk_name: &str, session: &SharedSession)
+```
+
+Focus-loss commit for inline rename (grid and list): Tab or the
+click-away deselect above commits exactly like Enter through an
+idle `activate()` (never mutates the grid mid-emission). Guarded by
+`should_commit_on_focus_loss`, so Escape (session cleared) and
+teardown (unmapped) never commit twice. Invalid names keep the
+field open via the existing activate path.
+
+### `should_commit_on_focus_loss`
+
+```rust
+fn should_commit_on_focus_loss(session_active_for_path: bool, mapped: bool) -> bool
+```
+
+True only while the rename session still points at this path and the
+field is mapped. Returns `false` after Escape or during teardown.
+
 ## File context menu
 
 Right-clicking an icon or a name shows a per-file `ContextMenu`
@@ -531,7 +572,7 @@ empty-space menu above.
 | 3 | Divider |
 | 4 | `context.move_to_trash` (Move to Trash, logs for now) |
 | 5 | Divider |
-| 6 | `context.get_info` (Get Info, logs for now), `context.rename` (Rename: inline edit below the icon, Enter commits, Escape cancels) |
+| 6 | `context.get_info` (Get Info, logs for now), `context.rename` (Rename: inline edit below the icon, Enter commits, Escape cancels, click-away/Tab commits) |
 | 7 | `context.compress`, `context.duplicate` (both log for now) |
 | 8 | `context.share` (Share) with trailing `arrowtriangle.forward.fill`, logs for now |
 | 8 | Divider |
@@ -682,7 +723,7 @@ pipeline log timing info to stderr with a `[finder]` prefix:
 
 | Prefix | Meaning |
 |---|---|
-| `[finder][rename]` | Menu click, Enter commit, commit result plus rebuild time |
+| `[finder][rename]` | Menu click, Enter commit, focus-loss commit, commit result plus rebuild time |
 | `[finder][new_folder]` | Menu click, created folder, refresh signal |
 | `[finder][tick]` | Watcher/menu signals per tick, snapshot verdict, rebuild time |
 | `[finder][refresh]` | `list_dir` time, cells slower than 20ms, total rebuild time |
