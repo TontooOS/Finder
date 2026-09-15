@@ -805,20 +805,21 @@ fn activate_index(
 }
 
 /// Placeholder for an empty or unreadable directory.
-fn empty_view() -> gtk::Widget {
-  empty_view_for(&search_query())
+fn empty_view(base: &std::path::Path) -> gtk::Widget {
+  empty_view_for(base, &search_query())
 }
 
 /// Placeholder picked by state: no-match text while searching,
 /// otherwise the folder-empty text.
-fn empty_view_for(query: &str) -> gtk::Widget {
+fn empty_view_for(base: &std::path::Path, query: &str) -> gtk::Widget {
   let (title_key, hint_key) = if query.is_empty() {
     ("detail.empty", "detail.empty.hint")
   } else {
     ("search.empty", "search.empty.hint")
   };
+  let name = folder_title(base);
   let empty = ContentUnavailableView::new()
-    .title(lang::t(title_key))
+    .title(lang::t(title_key).replace("{name}", &name))
     .message(lang::t(hint_key));
   let empty_gtk = empty.to_gtk();
   empty_gtk.set_hexpand(true);
@@ -852,7 +853,7 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
   match *ctx.mode.borrow() {
     prefs::ViewMode::Grid => {
       if model::list_dir(&base).is_empty() {
-        ctx.slot.append(&empty_view());
+        ctx.slot.append(&empty_view(&base));
         ctx
           .status
           .set_markup(&status_markup(&[], &ctx.pal, &base));
@@ -1114,7 +1115,7 @@ fn refresh_list(ctx: &ViewCtx, rebuild: &Rebuild) {
     .collect();
   let german = crate::lang::locale() == "de_de";
   if entries.is_empty() {
-    ctx.slot.append(&empty_view());
+    ctx.slot.append(&empty_view(&base));
   } else {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.set_hexpand(true);

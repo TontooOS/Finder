@@ -686,8 +686,8 @@ localized `name` in `Info.tontoo`). Keep both locations in sync.
 | `tags.creative` | `Creative` | `Kreativ` |
 | `tags.archive` | `Archive` | `Archiv` |
 | `detail.search` | `Search` | `Suchen` |
-| `detail.empty` | `Downloads is empty` | `Downloads ist leer` |
-| `detail.empty.hint` | `Files you download appear here.` | `Heruntergeladene Dateien erscheinen hier.` |
+| `detail.empty` | `{name} is empty` | `{name} ist leer` |
+| `detail.empty.hint` | `No items to show.` | `Keine Einträge zum Anzeigen.` |
 | `folder.untitled` | `Untitled Folder` | `Unbenannter Ordner` |
 | `context.new_folder` | `New Folder` | `Neuer Ordner` |
 | `context.get_info` | `Get Info` | `Informationen` |
