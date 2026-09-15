@@ -34,6 +34,8 @@ See [Finder.md](Finder.md) for details.
 
 ## Changelog
 
+- 2026-09-15: Fixed rename `gtk_box_append` critical (persistent grid scroll is detached before re-wrapping in the empty-space menu).
+
 - 2026-09-13: Click-away deselect for rename and search (capture-phase window gesture, empty space included); rename commits on focus loss like Enter, guarded so Escape never commits.
 - 2026-09-12: Launch `.app` bundles via LaunchPad (Open menu, double-click/Enter) as a separate process.
 - 2026-09-12: macOS-style grid selection (gray behind icon, blue tightly around label text).

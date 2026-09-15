@@ -868,6 +868,14 @@ fn refresh_content(ctx: &ViewCtx, rebuild: &Rebuild) {
           rebuild,
         );
         // Fresh empty-space menu each rebuild (captures the current base).
+        // The grid scroll view is persistent across rebuilds: detach it
+        // from the previous menu container before re-wrapping, otherwise
+        // the new container appends an already-parented child and GTK
+        // logs `gtk_box_append: assertion 'gtk_widget_get_parent (child)
+        // == NULL' failed` on every rename rebuild.
+        if ctx.grid_scroll.parent().is_some() {
+          ctx.grid_scroll.unparent();
+        }
         let wrapped = ContextMenu::new(GtkWrap::wrap(ctx.grid_scroll.clone()))
           .entries(empty_space_menu(&base, &ctx.session, &ctx.refresh))
           .to_gtk();

@@ -412,7 +412,13 @@ fn refresh_grid(grid: &FlowBox, status: &Label, pal: &Palette, base: &Path, sess
 Clears the grid and rebuilds it from `list_dir(base)` plus the status
 line. Always lists `base` (never a hardcoded folder), so the shown
 entries match the watched directory. Records the listing for
-double-click lookup and wires right-click selection per cell.
+double-click lookup and wires right-click selection per cell. The grid
+`ScrolledWindow` is persistent across rebuilds: it is detached
+(`unparent`) from the previous empty-space menu container before
+re-wrapping, otherwise the new container appends an already-parented
+child and GTK logs `gtk_box_append: assertion
+'gtk_widget_get_parent (child) == NULL' failed` on every rename
+rebuild.
 
 ### `set_cell_selected`
 
